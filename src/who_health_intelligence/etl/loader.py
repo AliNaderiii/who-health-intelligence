@@ -1,31 +1,44 @@
 """
 Database persistence layer for WHO health indicator data.
 
-Provides idempotent loading of DataFrames into SQLite with schema management,
-upsert support, and transactional integrity.
+Provides idempotent loading of DataFrames into SQLite with:
+- Explicit schema with typed columns and UNIQUE constraints
+- Upsert semantics (INSERT OR REPLACE) for idempotency
+- Transactional integrity (WAL journal mode)
+- Metadata tables for indicators, sources, and ETL run tracking
 """
 
-from typing import Optional, List
+from typing import Any, Dict, List, Optional
 import sqlite3
+from datetime import datetime, timezone
+
 import pandas as pd
 
 from ..utils.config import DATABASE_PATH, setup_logging
 
 logger = setup_logging(__name__)
 
+# Pipeline version — increment when schema or logic changes
+PIPELINE_VERSION = "3.0.0"
+
 
 class DatabaseLoader:
     """
     Idempotent SQLite database loader for WHO health data.
-    
-    Supports:
-    - Schema creation and versioning
-    - Idempotent upsert (insert or replace) operations
-    - Transactional integrity
-    - Query optimization indexes
+
+    Schema design decisions:
+    - ``UNIQUE(CountryCode, Year, Gender, Indicator, IndicatorCode)`` ensures
+      that re-running the pipeline does not create duplicates.
+    - ``INSERT OR REPLACE`` is used on the application side (via pandas
+      ``to_sql`` + a pre-delete) so that repeated runs with the same data
+      produce the same database state (idempotency).
+    - ``created_at`` records when each row was inserted.
     """
-    
-    # Schema DDL for the main health indicators table
+
+    # ------------------------------------------------------------------
+    # DDL
+    # ------------------------------------------------------------------
+
     CREATE_TABLE_SQL = """
     CREATE TABLE IF NOT EXISTS health_indicators (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -34,7 +47,7 @@ class DatabaseLoader:
         Year INTEGER NOT NULL,
         Gender TEXT NOT NULL,
         Indicator TEXT NOT NULL,
-        IndicatorCode TEXT,
+        IndicatorCode TEXT NOT NULL,
         IndicatorDescription TEXT,
         Value REAL NOT NULL,
         Continent TEXT,
@@ -42,8 +55,7 @@ class DatabaseLoader:
         UNIQUE(CountryCode, Year, Gender, Indicator, IndicatorCode)
     );
     """
-    
-    # Index definitions for query performance
+
     CREATE_INDEXES_SQL = [
         "CREATE INDEX IF NOT EXISTS idx_indicator ON health_indicators(Indicator);",
         "CREATE INDEX IF NOT EXISTS idx_country ON health_indicators(CountryCode);",
@@ -51,261 +63,325 @@ class DatabaseLoader:
         "CREATE INDEX IF NOT EXISTS idx_continent ON health_indicators(Continent);",
         "CREATE INDEX IF NOT EXISTS idx_composite ON health_indicators(Indicator, CountryCode, Year);",
     ]
-    
-    # Metadata table for tracking ETL runs
-    CREATE_METADATA_SQL = """
+
+    # ETL run tracking
+    CREATE_ETL_METADATA_SQL = """
     CREATE TABLE IF NOT EXISTS etl_metadata (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         run_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         indicator TEXT,
+        indicator_code TEXT,
+        records_extracted INTEGER,
         records_loaded INTEGER,
+        records_replaced INTEGER,
         status TEXT,
         duration_seconds REAL,
+        pipeline_version TEXT,
+        source_url TEXT,
         notes TEXT
     );
     """
-    
+
+    # Indicator definitions table
+    CREATE_INDICATOR_DEFS_SQL = """
+    CREATE TABLE IF NOT EXISTS indicator_definitions (
+        indicator_name TEXT PRIMARY KEY,
+        indicator_code TEXT NOT NULL UNIQUE,
+        description TEXT,
+        unit TEXT,
+        source_url TEXT,
+        registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    """
+
+    # Source information table
+    CREATE_SOURCE_INFO_SQL = """
+    CREATE TABLE IF NOT EXISTS source_info (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        extraction_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        source_name TEXT NOT NULL,
+        source_url TEXT NOT NULL,
+        pipeline_version TEXT,
+        total_records_extracted INTEGER,
+        total_records_loaded INTEGER,
+        indicators_extracted TEXT,
+        status TEXT,
+        notes TEXT
+    );
+    """
+
+    # ------------------------------------------------------------------
+    # Init
+    # ------------------------------------------------------------------
+
     def __init__(self, db_path: str = DATABASE_PATH):
-        """
-        Initialize the database loader.
-        
-        Args:
-            db_path: Path to the SQLite database file
-        """
         self.db_path = db_path
         self._initialize_schema()
-    
-    def _initialize_schema(self):
-        """Create tables and indexes if they don't exist."""
+
+    def _initialize_schema(self) -> None:
+        """Create all tables and indexes if they don't exist."""
         try:
             with self._get_connection() as conn:
-                cursor = conn.cursor()
-                
-                # Create main table
-                cursor.execute(self.CREATE_TABLE_SQL)
-                
-                # Create indexes
-                for index_sql in self.CREATE_INDEXES_SQL:
-                    cursor.execute(index_sql)
-                
-                # Create metadata table
-                cursor.execute(self.CREATE_METADATA_SQL)
-                
+                cur = conn.cursor()
+                cur.execute(self.CREATE_TABLE_SQL)
+                for idx_sql in self.CREATE_INDEXES_SQL:
+                    cur.execute(idx_sql)
+                cur.execute(self.CREATE_ETL_METADATA_SQL)
+                cur.execute(self.CREATE_INDICATOR_DEFS_SQL)
+                cur.execute(self.CREATE_SOURCE_INFO_SQL)
                 conn.commit()
-                logger.info(f"Database schema initialized at {self.db_path}")
-                
+            logger.info("Database schema initialized at %s", self.db_path)
         except Exception as e:
-            logger.error(f"Failed to initialize database schema: {e}")
+            logger.error("Failed to initialize database schema: %s", e)
             raise
-    
+
     def _get_connection(self) -> sqlite3.Connection:
-        """Get a database connection with appropriate settings."""
         conn = sqlite3.connect(self.db_path)
-        conn.execute("PRAGMA journal_mode=WAL")  # Write-ahead logging for performance
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA foreign_keys=ON")
         return conn
-    
+
+    # ------------------------------------------------------------------
+    # Loading
+    # ------------------------------------------------------------------
+
     def load_dataframe(
         self,
         df: pd.DataFrame,
         indicator_name: Optional[str] = None,
-        replace: bool = False
+        replace: bool = False,
     ) -> int:
         """
-        Load a DataFrame into the database with idempotent semantics.
-        
+        Load a DataFrame with idempotent semantics.
+
+        When ``replace=True``, existing rows for the given indicator are
+        deleted first, then the new data is inserted. This makes repeated
+        runs produce the same result (idempotency).
+
+        The UNIQUE constraint on the table also prevents accidental
+        duplicates if ``replace=False`` is used.
+
         Args:
-            df: DataFrame to load
-            indicator_name: Optional indicator name for tracking
-            replace: If True, replace existing data for this indicator
-            
+            df: DataFrame to load.
+            indicator_name: Indicator name (used for replace scope).
+            replace: If True, delete existing rows for this indicator first.
+
         Returns:
-            Number of records loaded
+            Number of records loaded.
         """
         if df.empty:
             logger.warning("Empty DataFrame, nothing to load")
             return 0
-        
+
+        replaced = 0
         try:
             with self._get_connection() as conn:
-                # If replacing, delete existing data for this indicator
                 if replace and indicator_name:
-                    cursor = conn.cursor()
-                    cursor.execute(
+                    cur = conn.cursor()
+                    cur.execute(
                         "DELETE FROM health_indicators WHERE Indicator = ?",
-                        (indicator_name,)
+                        (indicator_name,),
                     )
-                    deleted = cursor.rowcount
+                    replaced = cur.rowcount
                     conn.commit()
                     logger.info(
-                        f"Deleted {deleted} existing records for {indicator_name}"
+                        "Replaced %d existing records for %s",
+                        replaced,
+                        indicator_name,
                     )
-                
-                # Prepare DataFrame for loading
+
                 load_df = self._prepare_for_load(df)
-                
-                # Use INSERT OR REPLACE for idempotent upsert
+
                 load_df.to_sql(
-                    'health_indicators',
+                    "health_indicators",
                     conn,
-                    if_exists='append',
+                    if_exists="append",
                     index=False,
-                    method='multi',
-                    chunksize=1000
+                    method="multi",
+                    chunksize=1000,
                 )
-                
-                records_loaded = len(load_df)
+
+                loaded = len(load_df)
                 logger.info(
-                    f"Loaded {records_loaded} records "
-                    f"{'(replacing) ' if replace else ''}into database"
+                    "Loaded %d records %sinto database",
+                    loaded,
+                    "(replacing) " if replace else "",
                 )
-                
-                return records_loaded
-                
+                return loaded
+
         except Exception as e:
-            logger.error(f"Failed to load DataFrame: {e}")
+            logger.error("Failed to load DataFrame: %s", e)
             raise
-    
+
     def _prepare_for_load(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Prepare DataFrame for database insertion.
-        
-        - Convert categoricals to strings
-        - Ensure all required columns exist
-        - Handle timezone-aware timestamps
-        """
+        """Prepare DataFrame for insertion: convert types, fill defaults."""
         load_df = df.copy()
-        
-        # Convert categorical columns to string for SQLite compatibility
+
         for col in load_df.columns:
             if isinstance(load_df[col].dtype, pd.CategoricalDtype):
                 load_df[col] = load_df[col].astype(str)
-        
-        # Ensure required columns exist
-        required_cols = ['CountryCode', 'Year', 'Gender', 'Indicator', 'Value']
-        for col in required_cols:
+
+        required = ["CountryCode", "Year", "Gender", "Indicator", "Value"]
+        for col in required:
             if col not in load_df.columns:
                 raise ValueError(f"Missing required column: {col}")
-        
-        # Add optional columns with defaults if missing
-        optional_cols = {
-            'Country': None,
-            'IndicatorCode': '',
-            'IndicatorDescription': '',
-            'Continent': None
-        }
-        for col, default in optional_cols.items():
+
+        defaults = {"Country": None, "IndicatorCode": "", "IndicatorDescription": "", "Continent": None}
+        for col, default in defaults.items():
             if col not in load_df.columns:
                 load_df[col] = default
-        
-        # Remove autoincrement id if present
-        if 'id' in load_df.columns:
-            load_df = load_df.drop(columns=['id'])
-        
-        # Remove created_at if present (will be auto-generated)
-        if 'created_at' in load_df.columns:
-            load_df = load_df.drop(columns=['created_at'])
-        
+
+        for drop_col in ("id", "created_at"):
+            if drop_col in load_df.columns:
+                load_df = load_df.drop(columns=[drop_col])
+
         return load_df
-    
+
     def load_all_indicators(
         self,
         df: pd.DataFrame,
-        replace_all: bool = True
+        replace_all: bool = True,
     ) -> int:
-        """
-        Load a DataFrame containing multiple indicators.
-        
-        Args:
-            df: DataFrame with all indicator data
-            replace_all: If True, clear all existing data first
-            
-        Returns:
-            Total number of records loaded
-        """
+        """Load a multi-indicator DataFrame."""
         if replace_all:
             try:
                 with self._get_connection() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute("DELETE FROM health_indicators")
-                    deleted = cursor.rowcount
+                    cur = conn.cursor()
+                    cur.execute("DELETE FROM health_indicators")
+                    deleted = cur.rowcount
                     conn.commit()
-                    logger.info(f"Cleared {deleted} existing records")
+                    logger.info("Cleared %d existing records", deleted)
             except Exception as e:
-                logger.error(f"Failed to clear existing data: {e}")
+                logger.error("Failed to clear existing data: %s", e)
                 raise
-        
+
         return self.load_dataframe(df, replace=False)
-    
-    def query(
-        self,
-        sql: str,
-        params: Optional[tuple] = None
-    ) -> pd.DataFrame:
-        """
-        Execute a SQL query and return results as a DataFrame.
-        
-        Args:
-            sql: SQL query string
-            params: Optional query parameters
-            
-        Returns:
-            Query results as DataFrame
-        """
+
+    # ------------------------------------------------------------------
+    # Querying
+    # ------------------------------------------------------------------
+
+    def query(self, sql: str, params: Optional[tuple] = None) -> pd.DataFrame:
+        """Execute a SQL query and return results as a DataFrame."""
         try:
             with self._get_connection() as conn:
                 return pd.read_sql_query(sql, conn, params=params)
         except Exception as e:
-            logger.error(f"Query failed: {e}")
+            logger.error("Query failed: %s", e)
             raise
-    
-    def get_table_info(self) -> dict:
-        """Get information about the database tables."""
+
+    def get_table_info(self) -> Dict[str, Any]:
+        """Return metadata about all tables in the database."""
         with self._get_connection() as conn:
-            cursor = conn.cursor()
-            
-            # Table list
-            cursor.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            )
-            tables = [row[0] for row in cursor.fetchall()]
-            
-            info = {'tables': {}}
+            cur = conn.cursor()
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            tables = [r[0] for r in cur.fetchall()]
+
+            info: Dict[str, Any] = {"tables": {}}
             for table in tables:
-                cursor.execute(f"PRAGMA table_info({table})")
+                cur.execute(f"PRAGMA table_info({table})")
                 columns = [
-                    {'name': row[1], 'type': row[2], 'nullable': not row[3]}
-                    for row in cursor.fetchall()
+                    {"name": r[1], "type": r[2], "nullable": not r[3]}
+                    for r in cur.fetchall()
                 ]
-                
-                cursor.execute(f"SELECT COUNT(*) FROM {table}")
-                row_count = cursor.fetchone()[0]
-                
-                info['tables'][table] = {
-                    'columns': columns,
-                    'row_count': row_count
-                }
-            
+                cur.execute(f"SELECT COUNT(*) FROM {table}")
+                row_count = cur.fetchone()[0]
+                info["tables"][table] = {"columns": columns, "row_count": row_count}
             return info
-    
+
+    # ------------------------------------------------------------------
+    # Metadata writes
+    # ------------------------------------------------------------------
+
     def log_etl_run(
         self,
         indicator: str,
         records_loaded: int,
         status: str,
         duration_seconds: float,
-        notes: str = ""
-    ):
-        """Log an ETL run to the metadata table."""
+        notes: str = "",
+        indicator_code: str = "",
+        records_extracted: int = 0,
+        records_replaced: int = 0,
+        source_url: str = "",
+    ) -> None:
+        """Log an ETL run to the ``etl_metadata`` table."""
         try:
             with self._get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    """INSERT INTO etl_metadata 
-                       (indicator, records_loaded, status, duration_seconds, notes)
-                       VALUES (?, ?, ?, ?, ?)""",
-                    (indicator, records_loaded, status, duration_seconds, notes)
+                conn.execute(
+                    """INSERT INTO etl_metadata
+                       (indicator, indicator_code, records_extracted,
+                        records_loaded, records_replaced, status,
+                        duration_seconds, pipeline_version, source_url, notes)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        indicator,
+                        indicator_code,
+                        records_extracted,
+                        records_loaded,
+                        records_replaced,
+                        status,
+                        duration_seconds,
+                        PIPELINE_VERSION,
+                        source_url,
+                        notes,
+                    ),
                 )
                 conn.commit()
         except Exception as e:
-            logger.error(f"Failed to log ETL run: {e}")
+            logger.error("Failed to log ETL run: %s", e)
+
+    def log_source_info(
+        self,
+        source_name: str,
+        source_url: str,
+        total_extracted: int,
+        total_loaded: int,
+        indicators: List[str],
+        status: str,
+        notes: str = "",
+    ) -> None:
+        """Log overall source information for an ETL run."""
+        try:
+            with self._get_connection() as conn:
+                conn.execute(
+                    """INSERT INTO source_info
+                       (source_name, source_url, pipeline_version,
+                        total_records_extracted, total_records_loaded,
+                        indicators_extracted, status, notes)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        source_name,
+                        source_url,
+                        PIPELINE_VERSION,
+                        total_extracted,
+                        total_loaded,
+                        ", ".join(indicators),
+                        status,
+                        notes,
+                    ),
+                )
+                conn.commit()
+        except Exception as e:
+            logger.error("Failed to log source info: %s", e)
+
+    def register_indicator(
+        self,
+        name: str,
+        code: str,
+        description: str = "",
+        unit: str = "",
+        source_url: str = "",
+    ) -> None:
+        """Register an indicator definition (upsert)."""
+        try:
+            with self._get_connection() as conn:
+                conn.execute(
+                    """INSERT OR REPLACE INTO indicator_definitions
+                       (indicator_name, indicator_code, description, unit, source_url)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (name, code, description, unit, source_url),
+                )
+                conn.commit()
+        except Exception as e:
+            logger.error("Failed to register indicator %s: %s", name, e)
