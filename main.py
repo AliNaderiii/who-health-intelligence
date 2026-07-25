@@ -11,7 +11,6 @@ Provides CLI interface for:
 
 import argparse
 import sys
-import time
 from pathlib import Path
 
 # Add project root to path
@@ -120,7 +119,7 @@ def cmd_info(args):
     # Show indicator summary
     if info['tables']['health_indicators']['row_count'] > 0:
         df = loader.query("SELECT Indicator, COUNT(*) as count FROM health_indicators GROUP BY Indicator")
-        print(f"\n  Indicators:")
+        print("\n  Indicators:")
         for _, row in df.iterrows():
             print(f"    - {row['Indicator']}: {row['count']} records")
 

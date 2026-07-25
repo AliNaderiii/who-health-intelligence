@@ -13,19 +13,21 @@ This separation ensures:
 
 from __future__ import annotations
 
-import os
-import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import numpy as np
 import pandas as pd
 
 from ..etl.loader import DatabaseLoader
-from ..etl.metadata import COUNTRY_CONTINENT_MAP, COUNTRY_NAMES
-from ..etl.quality import DataQualityReport
-from ..utils.config import DATABASE_PATH, WHO_INDICATORS, setup_logging
+from ..utils.config import DATABASE_PATH, WHO_API_BASE_URL, WHO_INDICATORS, setup_logging
+
+try:
+    import analytics as analytics_utils
+    from data_quality import DataQualityReport
+except ModuleNotFoundError:  # pragma: no cover - supports repo-root imports in tests
+    from src import analytics as analytics_utils
+    from src.data_quality import DataQualityReport
 
 logger = setup_logging(__name__)
 
@@ -313,12 +315,17 @@ def compute_unweighted_average(
     Each country contributes equally regardless of population size.
     This is the correct aggregation when population data is unavailable.
     """
-    subset = df[df["Indicator"] == indicator]
-    if year is not None:
-        subset = subset[subset["Year"] == year]
-    if subset.empty:
+    years = [year] if year is not None else None
+    summary = analytics_utils.compute_unweighted_averages(
+        df,
+        group_by=["Indicator"] + (["Year"] if year is not None else []),
+        indicators=[indicator],
+        years=years,
+    )
+    if summary.empty:
         return None
-    return float(subset["Value"].mean())
+    value = summary["MeanValue"].dropna()
+    return float(value.iloc[0]) if not value.empty else None
 
 
 def compute_population_weighted_average(
@@ -338,31 +345,18 @@ def compute_population_weighted_average(
     This function exists to support future integration of World Bank
     or UN population data.
     """
-    if population_df is None or population_df.empty:
-        return None
-
-    subset = df[df["Indicator"] == indicator]
-    if year is not None:
-        subset = subset[subset["Year"] == year]
-    if subset.empty:
-        return None
-
-    pop_subset = population_df
-    if year is not None:
-        pop_subset = population_df[population_df["Year"] == year]
-
-    merged = subset.merge(
-        pop_subset[["CountryCode", "Population"]],
-        on="CountryCode",
-        how="inner",
+    years = [year] if year is not None else None
+    summary = analytics_utils.compute_population_weighted_averages(
+        df,
+        population_df,
+        group_by=["Indicator"] + (["Year"] if year is not None else []),
+        indicators=[indicator],
+        years=years,
     )
-
-    if merged.empty:
+    if summary.empty:
         return None
-
-    return float(
-        np.average(merged["Value"], weights=merged["Population"])
-    )
+    value = summary["WeightedMeanValue"].dropna()
+    return float(value.iloc[0]) if not value.empty else None
 
 
 # ============================================================
@@ -572,7 +566,7 @@ def get_data_source_metadata(
 
     return {
         "source": "World Health Organization — Global Health Observatory (GHO)",
-        "api": "https://ghoapi.azureedge.net/api/",
+        "api": WHO_API_BASE_URL,
         "extraction_date": db_metadata.get("extraction_date"),
         "db_last_modified": db_metadata.get("loaded_at"),
         "year_range": f"{year_min}–{year_max}" if year_min and year_max else "N/A",

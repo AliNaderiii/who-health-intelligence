@@ -4,7 +4,6 @@ Tests for the database loader module.
 
 import pytest
 import pandas as pd
-import sqlite3
 import tempfile
 import os
 

@@ -10,7 +10,6 @@ Provides idempotent loading of DataFrames into SQLite with:
 
 from typing import Any, Dict, List, Optional
 import sqlite3
-from datetime import datetime, timezone
 
 import pandas as pd
 

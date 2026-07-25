@@ -36,7 +36,6 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import os
 import sys
@@ -61,15 +60,15 @@ import pandas as pd
 from who_health_intelligence.api.client import WHOAPIClient
 from who_health_intelligence.etl.loader import DatabaseLoader, PIPELINE_VERSION
 from who_health_intelligence.etl.metadata import normalize_geography
-from who_health_intelligence.etl.quality import DataQualityReport
-from who_health_intelligence.etl.schema import validate_raw_api_records, validate_transformed_dataframe
+from data_quality import DataQualityReport
+from who_health_intelligence.etl.schema import validate_transformed_dataframe
 from who_health_intelligence.etl.transform import merge_indicator_dataframes, transform_indicator_records
 from who_health_intelligence.utils.config import (
     DATABASE_PATH,
     DEFAULT_INDICATORS,
+    RAW_DATA_PATH,
     WHO_API_BASE_URL,
     WHO_INDICATORS,
-    setup_logging,
 )
 
 # ---------------------------------------------------------------------------
@@ -358,7 +357,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--output-dir",
         default=None,
-        help="Directory for raw JSON output (default: <project>/data/raw)",
+        help=f"Directory for raw JSON output (default: {RAW_DATA_PATH})",
     )
     parser.add_argument(
         "--sample",
@@ -443,7 +442,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.output_dir:
             raw_dir = Path(args.output_dir) / "raw"
         else:
-            raw_dir = _SCRIPT_DIR / "data" / "raw"
+            raw_dir = RAW_DATA_PATH
         raw_dir.mkdir(parents=True, exist_ok=True)
         logger.info("Raw output: %s", raw_dir)
 

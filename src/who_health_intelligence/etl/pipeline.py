@@ -23,7 +23,11 @@ from ..utils.config import (
 from .transform import transform_indicator_records, merge_indicator_dataframes
 from .metadata import normalize_geography
 from .loader import DatabaseLoader
-from .quality import DataQualityReport
+
+try:
+    from data_quality import DataQualityReport
+except ModuleNotFoundError:  # pragma: no cover - supports repo-root imports in tests
+    from src.data_quality import DataQualityReport
 
 logger = setup_logging(__name__)
 

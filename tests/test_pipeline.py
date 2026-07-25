@@ -6,7 +6,6 @@ independently of network access and the Streamlit dashboard.
 """
 
 import sys
-import tempfile
 from pathlib import Path
 
 import pandas as pd

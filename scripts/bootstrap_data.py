@@ -23,7 +23,6 @@ from src.who_health_intelligence.etl.metadata import (
     normalize_geography
 )
 from src.who_health_intelligence.etl.loader import DatabaseLoader
-from src.who_health_intelligence.utils.config import WHO_INDICATORS
 
 
 def _generate_ncd_mortality(countries: list, years: list) -> pd.DataFrame:

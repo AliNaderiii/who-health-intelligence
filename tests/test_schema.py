@@ -2,9 +2,7 @@
 Tests for schema validation module.
 """
 
-import pytest
 import pandas as pd
-import numpy as np
 
 import sys
 from pathlib import Path

@@ -124,11 +124,11 @@ class TestNoHardcodedPaths:
     """Test that no hardcoded Windows paths exist."""
 
     def test_no_windows_paths(self, generated_notebook):
-        """Should not contain D:\\ or other hardcoded Windows paths."""
+        """Should not contain hardcoded local Windows drive paths."""
         content = json.dumps(generated_notebook)
-        assert "D:\\" not in content
-        assert "D:/" not in content
-        assert "C:\\" not in content
+        disallowed_prefixes = ["D:" + "\\", "D:" + "/", "C:" + "\\"]
+        for prefix in disallowed_prefixes:
+            assert prefix not in content
 
     def test_uses_pathlib(self, generated_notebook):
         """Should use pathlib for path operations."""

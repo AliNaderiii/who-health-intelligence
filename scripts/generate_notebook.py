@@ -25,7 +25,7 @@ from __future__ import annotations
 import argparse
 import logging
 from pathlib import Path
-from typing import List, Tuple
+from typing import List
 
 import nbformat
 from nbformat.v4 import new_code_cell, new_markdown_cell, new_notebook
@@ -107,7 +107,7 @@ Enable public health analysts to:
 
 ### Data Source
 - **Provider:** World Health Organization — Global Health Observatory (GHO)
-- **API:** OData v2 protocol at `https://ghoapi.azureedge.net/api/`
+- **API:** WHO GHO OData v2 protocol (base URL loaded from centralized configuration)
 - **Documentation:** https://www.who.int/data/gho/info/gho-odata-api
 
 ### Indicators
@@ -146,11 +146,13 @@ from pathlib import Path
 # Project root (repository root)
 PROJECT_ROOT = Path.cwd()
 SRC_DIR = PROJECT_ROOT / "src"
-DATA_DIR = PROJECT_ROOT / "data"
 
 # Ensure src/ is on the path
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
+
+# Centralized project paths
+from src.config import DATA_DIR, RAW_DATA_PATH, PROCESSED_DATA_PATH, METADATA_PATH, DATABASE_PATH
 
 # Sample mode: use existing database data instead of calling the API
 # Set to True if the WHO API is unreachable from your environment
@@ -176,6 +178,8 @@ from src.who_health_intelligence.utils.config import (
     DATABASE_PATH,
     WHO_API_BASE_URL,
     DEFAULT_INDICATORS,
+    RAW_DATA_PATH,
+    PROCESSED_DATA_PATH,
 )
 from src.who_health_intelligence.api.client import WHOAPIClient
 from src.who_health_intelligence.etl.schema import (
@@ -192,7 +196,8 @@ from src.who_health_intelligence.etl.metadata import (
     COUNTRY_CONTINENT_MAP,
 )
 from src.who_health_intelligence.etl.loader import DatabaseLoader
-from src.who_health_intelligence.etl.quality import DataQualityReport
+from src.data_quality import DataQualityReport
+from src.analytics import aggregate_continent_level, prepare_time_series
 
 # Configure logging
 logging.basicConfig(
@@ -238,7 +243,7 @@ raw_data = {}
 
 if SAMPLE_MODE:
     logger.info("SAMPLE_MODE: Loading data from existing database")
-    db_path = str(DATA_DIR / "who_health_data.db")
+    db_path = str(DATABASE_PATH)
     loader = DatabaseLoader(db_path)
     df_existing = loader.query("SELECT * FROM health_indicators")
 
@@ -262,7 +267,7 @@ if SAMPLE_MODE:
 else:
     logger.info("Extracting live data from WHO GHO API")
     # Create raw output directory
-    raw_dir = DATA_DIR / "raw"
+    raw_dir = RAW_DATA_PATH
     raw_dir.mkdir(parents=True, exist_ok=True)
 
     for name in DEFAULT_INDICATORS:
@@ -435,7 +440,7 @@ if transformed_dfs:
     merged_df = merge_indicator_dataframes(transformed_dfs)
 else:
     # Fall back to loading from database
-    db_path = str(DATA_DIR / "who_health_data.db")
+    db_path = str(DATABASE_PATH)
     if Path(db_path).exists():
         loader = DatabaseLoader(db_path)
         merged_df = loader.query("SELECT * FROM health_indicators")
@@ -530,7 +535,7 @@ identical database state. The alternative (INSERT OR IGNORE) would silently
 skip new data if the schema changes."""))
 
     cells.append(_code("""# Load into SQLite (using a temporary database for this notebook)
-notebook_db = str(DATA_DIR / "notebook_temp.db")
+notebook_db = str(PROCESSED_DATA_PATH / "notebook_temp.db")
 
 if not merged_df.empty:
     loader = DatabaseLoader(notebook_db)
@@ -646,14 +651,20 @@ Results are computed from actual data — nothing is fabricated."""))
     ]
 
     if not both_sexes.empty:
-        continental = both_sexes.groupby(["Continent", "Indicator"])["Value"].agg(
-            ["mean", "median", "count"]
-        ).round(2)
-        print(continental)
+        continental = aggregate_continent_level(
+            merged_df,
+            years=[latest_year],
+            gender="Both sexes",
+            weighting="unweighted",
+        )
+        display_cols = ["Continent", "Indicator", "Value", "CountryCount", "WeightingMethod"]
+        print(continental[display_cols].round({"Value": 2}))
     else:
         print("No data for 'Both sexes' in the latest year.")
-        print("Showing available data:")
-        print(merged_df.groupby(["Continent", "Indicator"])["Value"].agg(["mean", "count"]).round(2))"""))
+        print("Showing available data with reusable analytics helper:")
+        continental = aggregate_continent_level(merged_df, years=[latest_year], gender=None)
+        display_cols = ["Continent", "Indicator", "Value", "CountryCount", "WeightingMethod"]
+        print(continental[display_cols].round({"Value": 2}))"""))
 
     # ----------------------------------------------------------------
     # 16. Interactive Visualization Examples
@@ -709,20 +720,20 @@ else:
     trend = merged_df[merged_df["Indicator"] == indicator_to_plot]
 
     if not trend.empty:
-        yearly = trend.groupby("Year")["Value"].agg(["mean", "std"]).reset_index()
+        yearly = prepare_time_series(merged_df, indicator_to_plot)
 
         fig = go.Figure()
         fig.add_trace(go.Scatter(
-            x=yearly["Year"], y=yearly["mean"],
+            x=yearly["Year"], y=yearly["MeanValue"],
             mode="lines+markers", name="Mean",
             line=dict(color="#2563eb", width=2),
         ))
         fig.add_trace(go.Scatter(
-            x=yearly["Year"], y=yearly["mean"] + yearly["std"],
+            x=yearly["Year"], y=yearly["MeanValue"] + yearly["StdValue"],
             mode="lines", line=dict(width=0), showlegend=False,
         ))
         fig.add_trace(go.Scatter(
-            x=yearly["Year"], y=yearly["mean"] - yearly["std"],
+            x=yearly["Year"], y=yearly["MeanValue"] - yearly["StdValue"],
             mode="lines", line=dict(width=0),
             fill="tonexty", fillcolor="rgba(37,99,235,0.1)",
             name="±1 SD",

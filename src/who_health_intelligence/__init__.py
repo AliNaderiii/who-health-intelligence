@@ -12,6 +12,11 @@ Modules:
     - utils: Shared utilities and configuration
 """
 
-__version__ = "2.0.0"
+try:
+    from config import PROJECT_VERSION
+except ModuleNotFoundError:  # pragma: no cover - supports repo-root imports
+    from src.config import PROJECT_VERSION
+
+__version__ = PROJECT_VERSION
 __author__ = "WHO Health Intelligence Team"
 __license__ = "MIT"

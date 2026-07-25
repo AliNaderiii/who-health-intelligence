@@ -2,7 +2,6 @@
 Tests for the metadata/normalization module.
 """
 
-import pytest
 import pandas as pd
 
 import sys

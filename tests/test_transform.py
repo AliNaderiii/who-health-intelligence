@@ -2,7 +2,6 @@
 Tests for the ETL transform module.
 """
 
-import pytest
 import pandas as pd
 import numpy as np
 

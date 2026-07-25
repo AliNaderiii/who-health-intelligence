@@ -5,7 +5,7 @@ Defines expected column schemas, data types, value ranges, and provides
 validation functions to ensure data integrity throughout the ETL pipeline.
 """
 
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Tuple, Any
 import pandas as pd
 import numpy as np
 

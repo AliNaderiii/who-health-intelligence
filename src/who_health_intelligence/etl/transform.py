@@ -7,7 +7,6 @@ typed, validated DataFrames ready for persistence and analysis.
 
 from typing import Dict, List, Optional, Any
 import pandas as pd
-import numpy as np
 
 from ..utils.config import WHO_INDICATORS, setup_logging
 from .schema import validate_raw_api_records, validate_transformed_dataframe

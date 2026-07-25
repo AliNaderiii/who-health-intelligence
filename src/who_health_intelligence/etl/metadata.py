@@ -5,7 +5,7 @@ Provides mapping between ISO 3166-1 alpha-3 country codes, country names,
 and continent/region classifications. Supports WHO member state coverage.
 """
 
-from typing import Dict, Optional
+from typing import Dict
 import pandas as pd
 
 from ..utils.config import setup_logging
