@@ -1,724 +1,846 @@
 """
-WHO Global Health Intelligence Platform - Streamlit Dashboard.
+WHO Global Health Intelligence Platform — Streamlit Dashboard.
 
-A professional public health analytics dashboard providing interactive
-geographic, temporal, demographic, and indicator analysis of WHO GHO data.
+A descriptive public-health analytics dashboard for WHO Global Health
+Observatory data. This is a data-engineering and epidemiological analytics
+tool. It does NOT contain validated predictive models.
 
-This dashboard presents descriptive analytics only. It does NOT contain
-validated predictive models. Any forecasting is experimental and clearly
-labeled as such.
+All data logic lives in ``services.py``. This module is pure UI orchestration:
+layout, user interaction, chart rendering, and graceful error handling.
 """
+
+from __future__ import annotations
 
 import sys
 from pathlib import Path
 
-# Add project root to path for imports
-PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+# Resolve project root so imports work both under `streamlit run` and `python`
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
-import streamlit as st
 import pandas as pd
-import numpy as np
+import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 
-from src.who_health_intelligence.etl.loader import DatabaseLoader
-from src.who_health_intelligence.etl.quality import DataQualityReport
-from src.who_health_intelligence.utils.config import (
-    DATABASE_PATH,
-    WHO_INDICATORS,
-    DASHBOARD_TITLE,
-    DASHBOARD_SUBTITLE
-)
+# ---- Data services (all logic lives here) ----
+from who_health_intelligence.dashboard import services as svc
+from who_health_intelligence.utils.config import DATABASE_PATH, DASHBOARD_TITLE, DASHBOARD_SUBTITLE
 
 
-# ==========================================
-# Page Configuration
-# ==========================================
+# ================================================================
+# Page configuration — must be the first Streamlit call
+# ================================================================
 st.set_page_config(
-    page_title="WHO Global Health Intelligence",
+    page_title=DASHBOARD_TITLE,
     page_icon="🏥",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
 
-# ==========================================
-# Custom Styling
-# ==========================================
+# ================================================================
+# Minimal, accessible CSS
+# ================================================================
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+/* ---------- Base ---------- */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
-    html, body, [class*="css"] {
-        font-family: 'Inter', sans-serif;
-    }
+html, body, [class*="css"] {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    color: #1a1a2e;
+}
+.stApp { background-color: #f7f8fc; }
 
-    .stApp { background-color: #F8FAFC; color: #1E293B; }
+/* ---------- Typography ---------- */
+h1 { font-weight: 700; font-size: 1.8rem; color: #0f172a; margin-bottom: 0.2rem; }
+h2 { font-weight: 600; font-size: 1.25rem; color: #1e293b; margin-top: 1.2rem; }
+h3 { font-weight: 600; font-size: 1rem; color: #334155; }
 
-    /* Hide Streamlit Branding */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
+/* ---------- Metric cards ---------- */
+div[data-testid="metric-container"] {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 1rem 1.2rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+}
 
-    /* Typography */
-    h1 { color: #0F172A; font-weight: 800; font-size: 2.2rem; }
-    h2 { color: #1E3A8A; font-weight: 700; font-size: 1.4rem; margin-top: 1.5rem; }
-    h3 { color: #334155; font-weight: 600; font-size: 1.05rem; text-transform: uppercase; letter-spacing: 0.05em; }
+/* ---------- Panels ---------- */
+.panel-info {
+    background: #eff6ff; border-left: 4px solid #3b82f6;
+    padding: 0.8rem 1rem; border-radius: 6px; margin: 0.8rem 0; font-size: 0.92rem;
+}
+.panel-warning {
+    background: #fffbeb; border-left: 4px solid #f59e0b;
+    padding: 0.8rem 1rem; border-radius: 6px; margin: 0.8rem 0; font-size: 0.92rem;
+}
+.panel-success {
+    background: #f0fdf4; border-left: 4px solid #22c55e;
+    padding: 0.8rem 1rem; border-radius: 6px; margin: 0.8rem 0; font-size: 0.92rem;
+}
+.panel-neutral {
+    background: #f8fafc; border-left: 4px solid #94a3b8;
+    padding: 0.8rem 1rem; border-radius: 6px; margin: 0.8rem 0; font-size: 0.92rem;
+}
 
-    /* Metric Cards */
-    div[data-testid="metric-container"] {
-        background-color: #FFFFFF;
-        border: 1px solid #E2E8F0;
-        padding: 1.2rem;
-        border-radius: 10px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-    }
+/* ---------- Sidebar ---------- */
+section[data-testid="stSidebar"] h2 { font-size: 1.1rem; margin-top: 0.5rem; }
 
-    /* Info panels */
-    .info-panel {
-        background: linear-gradient(135deg, #1E3A8A 0%, #3B82F6 100%);
-        color: white;
-        padding: 1.2rem;
-        border-radius: 10px;
-        margin-bottom: 1.5rem;
-    }
-    .info-panel h4 { color: #93C5FD; margin-bottom: 0.5rem; font-weight: 700; text-transform: uppercase; font-size: 0.8rem; letter-spacing: 1px; }
-    .info-panel p { font-size: 0.95rem; font-weight: 500; line-height: 1.5; margin: 0; }
-
-    .warning-panel {
-        background-color: #FEF3C7;
-        border-left: 4px solid #F59E0B;
-        padding: 1rem;
-        border-radius: 6px;
-        margin: 1rem 0;
-    }
-
-    .methodology-panel {
-        background-color: #F0FDF4;
-        border-left: 4px solid #22C55E;
-        padding: 1rem;
-        border-radius: 6px;
-        margin: 1rem 0;
-    }
+/* ---------- Plotly containers ---------- */
+.js-plotly-plot { border-radius: 10px; }
 </style>
 """, unsafe_allow_html=True)
 
 
-# ==========================================
-# Data Loading
-# ==========================================
-@st.cache_data(ttl=3600)
-def load_data(db_path: str = DATABASE_PATH) -> pd.DataFrame:
-    """Load health indicator data from SQLite database."""
-    try:
-        loader = DatabaseLoader(db_path)
-        df = loader.query("SELECT * FROM health_indicators")
+# ================================================================
+# Header
+# ================================================================
+st.markdown(f"## 🏥 {DASHBOARD_TITLE}")
+st.markdown(
+    f"<span style='color:#64748b; font-size:0.95rem'>{DASHBOARD_SUBTITLE}</span>",
+    unsafe_allow_html=True,
+)
 
-        if df.empty:
-            return df
-
-        # Ensure proper types
-        df['Year'] = pd.to_numeric(df['Year'], errors='coerce').astype('Int32')
-        df['Value'] = pd.to_numeric(df['Value'], errors='coerce')
-
-        # Ensure categorical columns are strings for filtering
-        for col in ['CountryCode', 'Gender', 'Indicator', 'Continent']:
-            if col in df.columns:
-                df[col] = df[col].astype(str)
-
-        return df
-    except Exception as e:
-        st.error(f"Database loading error: {e}")
-        return pd.DataFrame()
+st.markdown(
+    '<div class="panel-neutral">'
+    "<strong>Scope:</strong> Descriptive analytics and data exploration. "
+    "No validated predictive models are included in this platform."
+    "</div>",
+    unsafe_allow_html=True,
+)
 
 
-@st.cache_data(ttl=3600)
-def compute_yoy_changes(df: pd.DataFrame) -> pd.DataFrame:
-    """Compute year-over-year changes for time series analysis."""
-    df = df.sort_values(['CountryCode', 'Indicator', 'Gender', 'Year'])
-    df['Prev_Value'] = df.groupby(
-        ['CountryCode', 'Indicator', 'Gender']
-    )['Value'].shift(1)
-    df['YoY_Change'] = df['Value'] - df['Prev_Value']
-    df['YoY_Pct'] = (df['YoY_Change'] / df['Prev_Value'] * 100).round(2)
-    return df
+# ================================================================
+# Data loading (cached)
+# ================================================================
+@st.cache_data(show_spinner="Loading health data …")
+def _cached_load(db_path: str):
+    return svc.load_full_dataset(db_path)
 
 
-def get_indicator_display_name(indicator: str) -> str:
-    """Get human-readable indicator name."""
-    info = WHO_INDICATORS.get(indicator, {})
-    return info.get('description', indicator.replace('_', ' ').title())
+df, db_meta = _cached_load(DATABASE_PATH)
 
-
-def get_indicator_short_name(indicator: str) -> str:
-    """Get short display name for indicators."""
-    names = {
-        'LIFE_EXPECTANCY': 'Life Expectancy',
-        'NCD_MORTALITY': 'NCD Mortality (30-70)',
-        'UHC_COVERAGE': 'UHC Coverage Index',
-        'MATERNAL_MORTALITY': 'Maternal Mortality',
-        'INFANT_MORTALITY': 'Infant Mortality'
-    }
-    return names.get(indicator, indicator)
-
-
-# ==========================================
-# Main Dashboard
-# ==========================================
-def main():
-    # Header
-    st.markdown(f"# 🏥 {DASHBOARD_TITLE}")
+# ---- Graceful failure: missing / empty database ----
+if df.empty:
+    error_msg = db_meta.get("error", "The database is missing or empty.")
+    st.error(f"**Data unavailable.** {error_msg}")
     st.markdown(
-        f"<p style='color: #64748B; font-size: 1rem; margin-top: -8px;'>"
-        f"{DASHBOARD_SUBTITLE}</p>",
-        unsafe_allow_html=True
+        '<div class="panel-info">'
+        "<strong>To load data:</strong><br>"
+        "<code>python main.py etl</code><br>"
+        "Or, for development with sample data:<br>"
+        "<code>python scripts/bootstrap_data.py</code>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    st.stop()
+
+
+# ---- Compute filter options (cached on full dataset) ----
+@st.cache_data
+def _filter_options(df_snapshot: pd.DataFrame):
+    return svc.get_filter_options(df_snapshot)
+
+
+opts = _filter_options(df)
+
+
+# ================================================================
+# Sidebar — Filters
+# ================================================================
+with st.sidebar:
+    st.markdown("### Filters")
+
+    # -- Indicator --
+    selected_indicators = st.multiselect(
+        "Indicators",
+        options=opts["indicators"],
+        default=opts["indicators"],
+        format_func=svc.indicator_short_name,
+        help="Select one or more health indicators to analyse.",
     )
 
-    # Load data
-    df = load_data()
-    if df.empty:
-        st.warning(
-            "No data available. Please run the ETL pipeline first:\n\n"
-            "```python\n"
-            "from src.who_health_intelligence.etl.pipeline import WHOETLPipeline\n"
-            "pipeline = WHOETLPipeline()\n"
-            "pipeline.run()\n"
-            "```"
-        )
-        st.stop()
-
-    # Compute derived metrics
-    df = compute_yoy_changes(df)
-
-    # ---- Sidebar Filters ----
-    with st.sidebar:
-        st.markdown("### 🎛️ Analysis Parameters")
-
-        # Available indicators
-        available_indicators = sorted(df['Indicator'].unique().tolist())
-        selected_indicators = st.multiselect(
-            "Health Indicators",
-            options=available_indicators,
-            default=available_indicators,
-            format_func=get_indicator_short_name
-        )
-
-        # Year range
-        available_years = sorted(df['Year'].dropna().unique())
-        if len(available_years) > 0:
-            year_range = st.slider(
-                "Year Range",
-                min_value=int(available_years[0]),
-                max_value=int(available_years[-1]),
-                value=(int(available_years[0]), int(available_years[-1]))
-            )
+    # -- Year --
+    if opts["years"]:
+        if len(opts["years"]) == 1:
+            year_range = (opts["years"][0], opts["years"][0])
+            st.text(f"Year: {opts['years'][0]} (only year available)")
         else:
-            year_range = (2000, 2023)
+            year_range = st.slider(
+                "Year range",
+                min_value=int(opts["years"][0]),
+                max_value=int(opts["years"][-1]),
+                value=(int(opts["years"][0]), int(opts["years"][-1])),
+            )
+    else:
+        year_range = (2000, 2023)
 
-        # Geographic filter
-        continents = ['Global'] + sorted(
-            [c for c in df['Continent'].unique() if c != 'Unknown' and c != 'nan']
-        )
-        selected_continent = st.selectbox("Geographic Region", continents)
-
-        # Gender filter
-        genders = sorted(df['Gender'].unique().tolist())
-        selected_gender = st.selectbox(
-            "Demographic Group",
-            genders,
-            index=genders.index('Both sexes') if 'Both sexes' in genders else 0
-        )
-
-        st.markdown("---")
-        st.markdown(
-            "<small>**Data Source:** WHO Global Health Observatory (GHO)<br>"
-            "**API:** ghoapi.azureedge.net<br>"
-            "**Last Updated:** See ETL metadata</small>",
-            unsafe_allow_html=True
-        )
-
-    # ---- Apply Filters ----
-    filtered_df = df[
-        (df['Indicator'].isin(selected_indicators)) &
-        (df['Year'] >= year_range[0]) &
-        (df['Year'] <= year_range[1]) &
-        (df['Gender'] == selected_gender)
-    ].copy()
-
-    if selected_continent != 'Global':
-        filtered_df = filtered_df[filtered_df['Continent'] == selected_continent]
-
-    if filtered_df.empty:
-        st.warning("No data matches the selected filters. Try adjusting your selection.")
-        st.stop()
-
-    # Current year snapshot
-    latest_year = filtered_df['Year'].max()
-    df_latest = filtered_df[filtered_df['Year'] == latest_year]
-
-    # ---- Key Metrics ----
-    st.markdown("### 📊 Key Health Metrics")
-    st.markdown(
-        f"<small>Snapshot for {int(latest_year)} | "
-        f"{filtered_df['CountryCode'].nunique()} countries | "
-        f"Gender: {selected_gender}</small>",
-        unsafe_allow_html=True
+    # -- Continent / Region --
+    continent_choices = ["All"] + opts["continents"]
+    selected_continent = st.selectbox(
+        "Region",
+        options=continent_choices,
+        help="Filter by continent. Select 'All' for global view.",
     )
 
-    metric_cols = st.columns(min(len(selected_indicators), 4))
-    for idx, indicator in enumerate(selected_indicators[:4]):
-        with metric_cols[idx]:
-            ind_data = df_latest[df_latest['Indicator'] == indicator]
-            if not ind_data.empty:
-                mean_val = ind_data['Value'].mean()
-                # Get previous year for delta
-                prev_year_data = filtered_df[
-                    (filtered_df['Indicator'] == indicator) &
-                    (filtered_df['Year'] == latest_year - 1)
-                ]
-                if not prev_year_data.empty:
-                    prev_mean = prev_year_data['Value'].mean()
-                    delta = mean_val - prev_mean
-                    # For mortality indicators, lower is better
-                    is_inverse = 'MORTALITY' in indicator
-                    st.metric(
-                        label=get_indicator_short_name(indicator),
-                        value=f"{mean_val:.1f}",
-                        delta=f"{delta:+.2f} vs {int(latest_year)-1}",
-                        delta_color="inverse" if is_inverse else "normal"
+    # -- Country --
+    country_codes_all = [c[0] for c in opts["countries"]]
+    country_labels = {c[0]: c[1] for c in opts["countries"]}
+    selected_countries = st.multiselect(
+        "Countries (optional)",
+        options=country_codes_all,
+        default=[],
+        format_func=lambda c: country_labels.get(c, c),
+        help="Leave empty for all countries. Select specific countries for focused analysis.",
+        max_selections=50,
+    )
+
+    # -- Gender / Demographic --
+    selected_genders = st.multiselect(
+        "Demographic group",
+        options=opts["genders"],
+        default=opts["genders"],
+        help="Select one or more demographic groups.",
+    )
+
+    st.divider()
+
+    # -- Data source metadata --
+    source_meta = svc.get_data_source_metadata(db_meta, df)
+    st.markdown("#### Data source")
+    st.caption(f"**{source_meta['source']}**")
+    st.caption(f"API: `{source_meta['api']}`")
+    if source_meta["extraction_date"]:
+        st.caption(f"Extracted: {source_meta['extraction_date']}")
+    st.caption(f"Years: {source_meta['year_range']}  ·  Records: {source_meta['total_records']:,}")
+
+
+# ================================================================
+# Apply filters
+# ================================================================
+continents_filter = None if selected_continent == "All" else [selected_continent]
+
+filtered_df = svc.apply_filters(
+    df,
+    indicators=selected_indicators if selected_indicators else None,
+    year_range=year_range,
+    countries=selected_countries if selected_countries else None,
+    continents=continents_filter,
+    genders=selected_genders if selected_genders else None,
+)
+
+# ---- Graceful failure: empty after filtering ----
+if filtered_df.empty:
+    st.warning(
+        "No data matches the current filter combination. "
+        "Try broadening your selection (e.g. selecting 'All' regions, more indicators, or a wider year range)."
+    )
+    st.stop()
+
+
+# ================================================================
+# Data summary bar
+# ================================================================
+st.markdown(svc.build_data_summary(filtered_df, db_meta))
+
+
+# ================================================================
+# KPI Cards
+# ================================================================
+latest_year = int(filtered_df["Year"].max())
+kpis = svc.compute_kpis(filtered_df, df, latest_year)
+
+k1, k2, k3, k4, k5 = st.columns(5)
+k1.metric("Countries reporting", f"{kpis['n_countries']}")
+k2.metric("Indicators", f"{kpis['n_indicators']}")
+k3.metric("Latest year", f"{kpis['selected_year']}")
+k4.metric("Reporting coverage", f"{kpis['reporting_coverage_pct']:.1f}%")
+k5.metric("Missing-value rate", f"{kpis['missing_value_rate_pct']:.2f}%")
+
+st.divider()
+
+
+# ================================================================
+# Automated Analytical Summary
+# ================================================================
+primary_indicator = selected_indicators[0] if selected_indicators else None
+if primary_indicator:
+    avg = svc.compute_unweighted_average(filtered_df, primary_indicator, latest_year)
+    if avg is not None:
+        ind_name = svc.indicator_short_name(primary_indicator)
+        ind_desc = svc.indicator_description(primary_indicator)
+        st.markdown(
+            f'<div class="panel-info">'
+            f"<strong>Automated Analytical Summary:</strong> "
+            f"In <strong>{latest_year}</strong>, the unweighted cross-country average for "
+            f"<em>{ind_name}</em> is <strong>{avg:.2f}</strong> across "
+            f"<strong>{kpis['n_countries']}</strong> reporting countries. "
+            f"Reporting coverage is {kpis['reporting_coverage_pct']:.1f}% of the dataset."
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+
+# ================================================================
+# Analytical Views — Tabs
+# ================================================================
+tab_map, tab_rank, tab_trend, tab_compare, tab_profile, tab_dist, tab_corr, tab_data = st.tabs(
+    [
+        "🗺️ Geographic",
+        "🏆 Ranking",
+        "📈 Trend",
+        "📊 Comparison",
+        "🏳️ Country Profile",
+        "📉 Distribution",
+        "🔗 Association",
+        "📋 Data Explorer",
+    ]
+)
+
+
+# ----------------------------------------------------------------
+# Tab 1: Geographic — Choropleth
+# ----------------------------------------------------------------
+with tab_map:
+    st.markdown("### Global Choropleth Map")
+
+    if primary_indicator is None:
+        st.info("Select at least one indicator to view the map.")
+    else:
+        indicator_sel = (
+            st.selectbox(
+                "Indicator for map",
+                selected_indicators,
+                format_func=svc.indicator_short_name,
+                key="map_indicator",
+            )
+            if len(selected_indicators) > 1
+            else primary_indicator
+        )
+        map_year = st.slider(
+            "Year",
+            min_value=int(filtered_df["Year"].min()),
+            max_value=int(filtered_df["Year"].max()),
+            value=min(latest_year, int(filtered_df["Year"].max())),
+            key="map_year",
+        )
+        geo_df = svc.build_geospatial_data(filtered_df, indicator_sel, map_year)
+
+        if geo_df.empty:
+            st.info("No geographic data for this selection. The indicator may not have data for the selected year.")
+        else:
+            hover_cols = {"Value": ":.2f", "Continent": True, "CountryCode": False}
+            color_scale = "RdYlGn_r" if "MORTALITY" in indicator_sel else "RdYlGn"
+            fig = px.choropleth(
+                geo_df,
+                locations="CountryCode",
+                color="Value",
+                hover_name="Country" if "Country" in geo_df.columns else "CountryCode",
+                hover_data=hover_cols,
+                color_continuous_scale=color_scale,
+                labels={"Value": svc.indicator_description(indicator_sel)},
+                height=520,
+            )
+            fig.update_layout(
+                geo=dict(showframe=True, showcoastlines=True, projection_type="natural earth"),
+                margin=dict(l=0, r=0, t=10, b=0),
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Continent-level summary
+            if "Continent" in geo_df.columns:
+                cont_agg = (
+                    geo_df.groupby("Continent")["Value"]
+                    .agg(["mean", "median", "min", "max", "count"])
+                    .round(2)
+                    .reset_index()
+                )
+                cont_agg.columns = ["Region", "Mean", "Median", "Min", "Max", "Countries"]
+                st.markdown("##### Unweighted regional averages")
+                st.caption(
+                    "Each country weighted equally. "
+                    "Population-weighted averages require population data (not currently available)."
+                )
+                st.dataframe(cont_agg, use_container_width=True, hide_index=True)
+
+
+# ----------------------------------------------------------------
+# Tab 2: Country Ranking
+# ----------------------------------------------------------------
+with tab_rank:
+    st.markdown("### Country Ranking")
+
+    if not selected_indicators:
+        st.info("Select at least one indicator.")
+    else:
+        rank_indicator = st.selectbox(
+            "Rank by",
+            selected_indicators,
+            format_func=svc.indicator_short_name,
+            key="rank_indicator",
+        )
+        rank_year = st.slider(
+            "Year",
+            min_value=int(filtered_df["Year"].min()),
+            max_value=int(filtered_df["Year"].max()),
+            value=min(latest_year, int(filtered_df["Year"].max())),
+            key="rank_year",
+        )
+        rank_n = st.slider("Show top N", 5, 50, 20, key="rank_n")
+
+        is_mortality = "MORTALITY" in rank_indicator
+        rank_df = svc.build_ranking_data(
+            filtered_df, rank_indicator, rank_year, top_n=rank_n, ascending=not is_mortality
+        )
+
+        if rank_df.empty:
+            st.info("No data available for ranking with this selection.")
+        else:
+            name_col = "Country" if "Country" in rank_df.columns else "CountryCode"
+            fig = px.bar(
+                rank_df,
+                x="Value",
+                y=name_col,
+                orientation="h",
+                color="Value",
+                color_continuous_scale="RdYlGn_r" if is_mortality else "RdYlGn",
+                labels={"Value": svc.indicator_short_name(rank_indicator)},
+                height=max(350, rank_n * 22),
+            )
+            fig.update_layout(
+                yaxis={"categoryorder": "total ascending"},
+                showlegend=False,
+                margin=dict(l=0, r=10, t=10, b=0),
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+
+# ----------------------------------------------------------------
+# Tab 3: Time-series Trend
+# ----------------------------------------------------------------
+with tab_trend:
+    st.markdown("### Time-Series Trend")
+
+    if not selected_indicators:
+        st.info("Select at least one indicator.")
+    else:
+        for indicator in selected_indicators:
+            st.markdown(f"##### {svc.indicator_short_name(indicator)}")
+            st.caption(svc.indicator_description(indicator))
+
+            ts = svc.build_time_series_data(filtered_df, indicator)
+            if ts.empty:
+                st.info("No temporal data available for this indicator.")
+                continue
+
+            fig = go.Figure()
+            # Mean line
+            fig.add_trace(go.Scatter(
+                x=ts["Year"], y=ts["mean"],
+                mode="lines+markers", name="Unweighted mean",
+                line=dict(color="#2563eb", width=2.5),
+                marker=dict(size=5),
+            ))
+            # Confidence band ±1 std
+            fig.add_trace(go.Scatter(
+                x=ts["Year"], y=ts["mean"] + ts["std"],
+                mode="lines", line=dict(width=0), showlegend=False,
+            ))
+            fig.add_trace(go.Scatter(
+                x=ts["Year"], y=ts["mean"] - ts["std"],
+                mode="lines", line=dict(width=0),
+                fill="tonexty", fillcolor="rgba(37,99,235,0.10)",
+                name="±1 SD band",
+            ))
+            fig.update_layout(
+                xaxis_title="Year",
+                yaxis_title=svc.indicator_description(indicator),
+                height=370,
+                template="plotly_white",
+                margin=dict(l=50, r=20, t=15, b=40),
+                legend=dict(orientation="h", y=1.08),
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            st.caption(
+                "**Note:** This shows the *unweighted* country-level mean (each country counted equally). "
+                "Population-weighted averaging is not available because population data is not included in this dataset."
+            )
+
+            # Top-country trend lines
+            st.markdown("**Selected-country trends**")
+            country_ts = svc.build_country_time_series(filtered_df, indicator, top_n=8)
+            if not country_ts.empty:
+                name_col = "Country" if "Country" in country_ts.columns else "CountryCode"
+                fig2 = px.line(
+                    country_ts, x="Year", y="Value", color=name_col,
+                    labels={"Value": svc.indicator_short_name(indicator)},
+                    height=320,
+                )
+                fig2.update_layout(
+                    template="plotly_white",
+                    margin=dict(l=50, r=20, t=10, b=40),
+                    legend=dict(orientation="h", y=-0.25),
+                )
+                st.plotly_chart(fig2, use_container_width=True)
+
+
+# ----------------------------------------------------------------
+# Tab 4: Indicator Comparison
+# ----------------------------------------------------------------
+with tab_compare:
+    st.markdown("### Indicator Comparison")
+    st.caption("Compare indicator values across countries in a single year.")
+
+    if len(selected_indicators) < 2:
+        st.info("Select at least **two** indicators to compare.")
+    else:
+        comp_year = st.slider(
+            "Year",
+            min_value=int(filtered_df["Year"].min()),
+            max_value=int(filtered_df["Year"].max()),
+            value=min(latest_year, int(filtered_df["Year"].max())),
+            key="comp_year",
+        )
+
+        year_data = filtered_df[filtered_df["Year"] == comp_year]
+        if "Both sexes" in year_data["Gender"].values:
+            year_data = year_data[year_data["Gender"] == "Both sexes"]
+
+        pivot = year_data.pivot_table(
+            index="CountryCode",
+            columns="Indicator",
+            values="Value",
+            aggfunc="mean",
+        )
+        if "Country" in year_data.columns:
+            name_map = year_data[["CountryCode", "Country"]].drop_duplicates().set_index("CountryCode")["Country"]
+            pivot.insert(0, "Country", pivot.index.map(name_map))
+
+        pivot.columns = [
+            svc.indicator_short_name(c) if c in svc.INDICATOR_SHORT_NAMES else c
+            for c in pivot.columns
+        ]
+        st.dataframe(pivot.round(2), use_container_width=True, hide_index=True, height=400)
+
+
+# ----------------------------------------------------------------
+# Tab 5: Country Profile
+# ----------------------------------------------------------------
+with tab_profile:
+    st.markdown("### Country Profile")
+    st.caption("Deep-dive into a single country's time-series across all indicators.")
+
+    profile_country = st.selectbox(
+        "Select country",
+        options=country_codes_all,
+        format_func=lambda c: country_labels.get(c, c),
+        key="profile_country",
+    )
+    profile_df = svc.build_country_profile(filtered_df, profile_country)
+
+    if profile_df.empty:
+        st.info(
+            f"No data available for **{country_labels.get(profile_country, profile_country)}** "
+            f"with current filters."
+        )
+    else:
+        country_name = country_labels.get(profile_country, profile_country)
+        st.markdown(f"#### {country_name} ({profile_country})")
+
+        for indicator in profile_df["Indicator"].unique():
+            ind_data = profile_df[profile_df["Indicator"] == indicator].sort_values("Year")
+            if ind_data.empty:
+                continue
+            st.markdown(f"**{svc.indicator_short_name(indicator)}**")
+            fig = px.line(
+                ind_data, x="Year", y="Value",
+                labels={"Value": svc.indicator_description(indicator)},
+                height=250,
+            )
+            fig.update_traces(line=dict(color="#2563eb", width=2))
+            fig.update_layout(template="plotly_white", margin=dict(l=40, r=10, t=10, b=30))
+            st.plotly_chart(fig, use_container_width=True)
+
+            st.caption(
+                f"Mean: {ind_data['Value'].mean():.2f}  ·  "
+                f"Min: {ind_data['Value'].min():.2f} ({int(ind_data.loc[ind_data['Value'].idxmin(), 'Year'])})  ·  "
+                f"Max: {ind_data['Value'].max():.2f} ({int(ind_data.loc[ind_data['Value'].idxmax(), 'Year'])})"
+            )
+
+
+# ----------------------------------------------------------------
+# Tab 6: Distribution Analysis
+# ----------------------------------------------------------------
+with tab_dist:
+    st.markdown("### Distribution Analysis")
+    st.caption("Examine the distribution of values across countries.")
+
+    if not selected_indicators:
+        st.info("Select at least one indicator.")
+    else:
+        dist_indicator = st.selectbox(
+            "Indicator",
+            selected_indicators,
+            format_func=svc.indicator_short_name,
+            key="dist_indicator",
+        )
+        dist_year = st.slider(
+            "Year",
+            min_value=int(filtered_df["Year"].min()),
+            max_value=int(filtered_df["Year"].max()),
+            value=min(latest_year, int(filtered_df["Year"].max())),
+            key="dist_year",
+        )
+
+        dist_df = svc.build_distribution_data(filtered_df, dist_indicator, dist_year)
+
+        if dist_df.empty:
+            st.info("No data for this selection.")
+        else:
+            col_hist, col_box = st.columns(2)
+
+            with col_hist:
+                st.markdown("**Histogram**")
+                fig_hist = px.histogram(
+                    dist_df, x="Value",
+                    nbins=25,
+                    color="Continent" if "Continent" in dist_df.columns else None,
+                    labels={"Value": svc.indicator_description(dist_indicator)},
+                    height=350,
+                )
+                fig_hist.update_layout(template="plotly_white", margin=dict(l=40, r=10, t=10, b=30))
+                st.plotly_chart(fig_hist, use_container_width=True)
+
+            with col_box:
+                st.markdown("**Box plot by region**")
+                if "Continent" in dist_df.columns:
+                    fig_box = px.box(
+                        dist_df, x="Continent", y="Value",
+                        color="Continent",
+                        labels={"Value": svc.indicator_short_name(dist_indicator)},
+                        height=350,
                     )
                 else:
-                    st.metric(
-                        label=get_indicator_short_name(indicator),
-                        value=f"{mean_val:.1f}"
+                    fig_box = px.box(
+                        dist_df, y="Value",
+                        labels={"Value": svc.indicator_short_name(dist_indicator)},
+                        height=350,
                     )
-
-    st.markdown("---")
-
-    # ---- Tabbed Interface ----
-    tabs = st.tabs([
-        "🗺️ Geographic Analysis",
-        "📈 Temporal Trends",
-        "👥 Demographic Analysis",
-        "🔗 Indicator Correlation",
-        "📋 Data Explorer",
-        "ℹ️ Methodology"
-    ])
-
-    # ==== TAB 1: Geographic Analysis ====
-    with tabs[0]:
-        st.markdown("### 🗺️ Geographic Distribution")
-
-        if len(selected_indicators) > 0:
-            primary_indicator = selected_indicators[0]
-            geo_df = df_latest[df_latest['Indicator'] == primary_indicator].copy()
-
-            if not geo_df.empty and 'Continent' in geo_df.columns:
-                col_map, col_rank = st.columns([2, 1])
-
-                with col_map:
-                    st.markdown(f"**{get_indicator_short_name(primary_indicator)}** by Country")
-                    geo_clean = geo_df.dropna(subset=['Value'])
-
-                    if not geo_clean.empty:
-                        fig_map = px.choropleth(
-                            geo_clean,
-                            locations="CountryCode",
-                            color="Value",
-                            hover_name="Country" if "Country" in geo_clean.columns else "CountryCode",
-                            hover_data={
-                                'Value': ':.2f',
-                                'Continent': True,
-                                'CountryCode': False
-                            },
-                            color_continuous_scale="RdYlGn_r" if 'MORTALITY' in primary_indicator else "RdYlGn",
-                            labels={'Value': get_indicator_display_name(primary_indicator)},
-                            height=500
-                        )
-                        fig_map.update_layout(
-                            geo=dict(
-                                showframe=True,
-                                showcoastlines=True,
-                                projection_type='natural earth',
-                                bgcolor='rgba(0,0,0,0)'
-                            ),
-                            margin=dict(l=0, r=0, t=20, b=0),
-                            paper_bgcolor='rgba(0,0,0,0)'
-                        )
-                        st.plotly_chart(fig_map, use_container_width=True)
-                    else:
-                        st.info("No geographic data available for this selection.")
-
-                with col_rank:
-                    st.markdown("**Country Rankings**")
-                    rank_df = geo_df.nlargest(15, 'Value')[
-                        ['Country', 'Value']
-                    ] if 'Country' in geo_df.columns else geo_df.nlargest(15, 'Value')[['CountryCode', 'Value']]
-
-                    if not rank_df.empty:
-                        name_col = 'Country' if 'Country' in rank_df.columns else 'CountryCode'
-                        fig_bar = px.bar(
-                            rank_df,
-                            x='Value',
-                            y=name_col,
-                            orientation='h',
-                            color='Value',
-                            color_continuous_scale='RdYlGn_r' if 'MORTALITY' in primary_indicator else 'RdYlGn',
-                            labels={'Value': get_indicator_short_name(primary_indicator)},
-                            height=500
-                        )
-                        fig_bar.update_layout(
-                            yaxis={'categoryorder': 'total ascending'},
-                            showlegend=False,
-                            margin=dict(l=0, r=0, t=10, b=0),
-                            paper_bgcolor='rgba(0,0,0,0)',
-                            plot_bgcolor='rgba(0,0,0,0)'
-                        )
-                        st.plotly_chart(fig_bar, use_container_width=True)
-
-                # Continent-level summary
-                st.markdown("#### Continental Summary")
-                if 'Continent' in geo_df.columns:
-                    continent_summary = geo_df.groupby('Continent')['Value'].agg(
-                        ['mean', 'median', 'min', 'max', 'count']
-                    ).round(2).reset_index()
-                    continent_summary.columns = ['Continent', 'Mean', 'Median', 'Min', 'Max', 'Countries']
-                    st.dataframe(continent_summary, use_container_width=True, hide_index=True)
-
-    # ==== TAB 2: Temporal Trends ====
-    with tabs[1]:
-        st.markdown("### 📈 Temporal Trend Analysis")
-
-        if len(selected_indicators) > 0:
-            # Time series for selected indicators
-            for indicator in selected_indicators:
-                st.markdown(f"#### {get_indicator_short_name(indicator)}")
-                st.markdown(
-                    f"<small>{get_indicator_display_name(indicator)}</small>",
-                    unsafe_allow_html=True
-                )
-
-                trend_df = filtered_df[filtered_df['Indicator'] == indicator]
-
-                if trend_df.empty:
-                    st.info("No data available for temporal analysis.")
-                    continue
-
-                # Global trend (mean across countries per year)
-                global_trend = trend_df.groupby('Year')['Value'].agg(
-                    ['mean', 'std', 'median']
-                ).reset_index()
-
-                fig_trend = go.Figure()
-
-                # Mean line
-                fig_trend.add_trace(go.Scatter(
-                    x=global_trend['Year'],
-                    y=global_trend['mean'],
-                    mode='lines+markers',
-                    name='Global Mean',
-                    line=dict(color='#2563EB', width=3),
-                    marker=dict(size=6)
-                ))
-
-                # Confidence band (±1 std)
-                fig_trend.add_trace(go.Scatter(
-                    x=global_trend['Year'],
-                    y=global_trend['mean'] + global_trend['std'],
-                    mode='lines',
-                    line=dict(width=0),
-                    showlegend=False
-                ))
-                fig_trend.add_trace(go.Scatter(
-                    x=global_trend['Year'],
-                    y=global_trend['mean'] - global_trend['std'],
-                    mode='lines',
-                    line=dict(width=0),
-                    fill='tonexty',
-                    fillcolor='rgba(37, 99, 235, 0.1)',
-                    name='±1 Std Dev',
-                    showlegend=True
-                ))
-
-                fig_trend.update_layout(
-                    xaxis_title='Year',
-                    yaxis_title=get_indicator_display_name(indicator),
-                    height=400,
-                    template='plotly_white',
-                    margin=dict(l=50, r=20, t=20, b=40),
-                    legend=dict(orientation='h', y=1.1)
-                )
-                st.plotly_chart(fig_trend, use_container_width=True)
-
-                # Top country trends
-                st.markdown("**Selected Country Trends**")
-                top_countries = trend_df.groupby('CountryCode')['Value'].mean().nlargest(10).index
-                country_trends = trend_df[trend_df['CountryCode'].isin(top_countries)]
-
-                fig_countries = px.line(
-                    country_trends,
-                    x='Year',
-                    y='Value',
-                    color='Country' if 'Country' in country_trends.columns else 'CountryCode',
-                    labels={'Value': get_indicator_short_name(indicator)},
-                    height=350
-                )
-                fig_countries.update_layout(
-                    template='plotly_white',
-                    margin=dict(l=50, r=20, t=20, b=40),
-                    legend=dict(orientation='h', y=-0.2)
-                )
-                st.plotly_chart(fig_countries, use_container_width=True)
-
-    # ==== TAB 3: Demographic Analysis ====
-    with tabs[2]:
-        st.markdown("### 👥 Demographic Comparison")
-
-        # Show all genders side by side
-        demo_df = filtered_df[
-            (filtered_df['Indicator'].isin(selected_indicators)) &
-            (filtered_df['Year'] == latest_year)
-        ]
-
-        if not demo_df.empty:
-            for indicator in selected_indicators:
-                st.markdown(f"#### {get_indicator_short_name(indicator)}")
-
-                ind_demo = demo_df[demo_df['Indicator'] == indicator]
-
-                # Gender comparison box plots
-                fig_box = px.box(
-                    ind_demo,
-                    x='Gender',
-                    y='Value',
-                    color='Gender',
-                    labels={'Value': get_indicator_display_name(indicator)},
-                    height=350
-                )
                 fig_box.update_layout(
-                    template='plotly_white',
-                    showlegend=False,
-                    margin=dict(l=50, r=20, t=20, b=40)
+                    template="plotly_white", showlegend=False,
+                    margin=dict(l=40, r=10, t=10, b=30),
                 )
                 st.plotly_chart(fig_box, use_container_width=True)
 
-                # Gender gap analysis
-                gender_summary = ind_demo.groupby('Gender')['Value'].agg(
-                    ['mean', 'median', 'std']
-                ).round(2)
-                st.dataframe(gender_summary, use_container_width=True)
+            # Descriptive stats
+            st.markdown("**Summary statistics**")
+            stats = dist_df["Value"].describe().round(2)
+            st.dataframe(stats, use_container_width=True)
 
-    # ==== TAB 4: Indicator Correlation ====
-    with tabs[3]:
-        st.markdown("### 🔗 Cross-Indicator Correlation Analysis")
 
-        if len(selected_indicators) >= 2:
-            st.markdown(
-                "Explore relationships between health indicators. "
-                "This is **descriptive analytics** showing observed correlations, "
-                "not causal inference or predictive modeling."
-            )
+# ----------------------------------------------------------------
+# Tab 7: Statistical Association Analysis
+# ----------------------------------------------------------------
+with tab_corr:
+    st.markdown("### Statistical Association Analysis")
 
-            ind1 = st.selectbox("X-Axis Indicator", selected_indicators, index=0)
-            ind2 = st.selectbox(
-                "Y-Axis Indicator",
-                selected_indicators,
-                index=min(1, len(selected_indicators) - 1)
-            )
+    if len(selected_indicators) < 2:
+        st.info("Select at least **two** indicators to explore associations.")
+    else:
+        st.markdown(
+            '<div class="panel-warning">'
+            "<strong>Important:</strong> This view shows <em>statistical associations</em> "
+            "between indicators. Association does not imply causation. "
+            "Observed correlations may be driven by shared confounders (e.g. GDP, "
+            "healthcare investment, data quality) and should not be interpreted as "
+            "causal relationships."
+            "</div>",
+            unsafe_allow_html=True,
+        )
 
-            if ind1 != ind2:
-                # Merge the two indicators
-                df_ind1 = df_latest[df_latest['Indicator'] == ind1][
-                    ['CountryCode', 'Value', 'Continent']
-                ].rename(columns={'Value': f'Value_{ind1}'})
-                df_ind2 = df_latest[df_latest['Indicator'] == ind2][
-                    ['CountryCode', 'Value']
-                ].rename(columns={'Value': f'Value_{ind2}'})
+        ind_x = st.selectbox(
+            "X-axis indicator", selected_indicators,
+            format_func=svc.indicator_short_name, key="corr_x",
+        )
+        remaining = [i for i in selected_indicators if i != ind_x]
+        ind_y = st.selectbox(
+            "Y-axis indicator", remaining,
+            format_func=svc.indicator_short_name, key="corr_y",
+        )
+        corr_year = st.slider(
+            "Year",
+            min_value=int(filtered_df["Year"].min()),
+            max_value=int(filtered_df["Year"].max()),
+            value=min(latest_year, int(filtered_df["Year"].max())),
+            key="corr_year",
+        )
 
-                if 'Country' in df_latest.columns:
-                    df_names = df_latest[df_latest['Indicator'] == ind1][
-                        ['CountryCode', 'Country']
-                    ].drop_duplicates()
-                    merged = pd.merge(df_ind1, df_ind2, on='CountryCode')
-                    merged = pd.merge(merged, df_names, on='CountryCode', how='left')
-                else:
-                    merged = pd.merge(df_ind1, df_ind2, on='CountryCode')
+        corr_df, pearson_r = svc.build_correlation_data(filtered_df, ind_x, ind_y, corr_year)
 
-                merged = merged.dropna()
-
-                if not merged.empty:
-                    fig_scatter = px.scatter(
-                        merged,
-                        x=f'Value_{ind1}',
-                        y=f'Value_{ind2}',
-                        color='Continent' if 'Continent' in merged.columns else None,
-                        hover_name='Country' if 'Country' in merged.columns else 'CountryCode',
-                        trendline='ols',
-                        labels={
-                            f'Value_{ind1}': get_indicator_short_name(ind1),
-                            f'Value_{ind2}': get_indicator_short_name(ind2)
-                        },
-                        height=500
-                    )
-                    fig_scatter.update_layout(
-                        template='plotly_white',
-                        margin=dict(l=50, r=20, t=20, b=40)
-                    )
-                    st.plotly_chart(fig_scatter, use_container_width=True)
-
-                    # Correlation coefficient
-                    corr = merged[f'Value_{ind1}'].corr(merged[f'Value_{ind2}'])
-                    st.markdown(
-                        f"**Pearson Correlation:** {corr:.3f} "
-                        f"({abs(corr):.1%} {'strong' if abs(corr) > 0.7 else 'moderate' if abs(corr) > 0.4 else 'weak'} "
-                        f"{'positive' if corr > 0 else 'negative'} correlation)"
-                    )
-
-                    st.markdown(
-                        '<div class="warning-panel">'
-                        '<strong>Note:</strong> Correlation does not imply causation. '
-                        'These are observed statistical associations in the data and '
-                        'should not be interpreted as causal relationships.'
-                        '</div>',
-                        unsafe_allow_html=True
-                    )
-                else:
-                    st.info("No overlapping data available for the selected indicators.")
-            else:
-                st.info("Please select two different indicators for correlation analysis.")
+        if corr_df.empty:
+            st.info("Insufficient overlapping data for this analysis.")
         else:
-            st.info(
-                "Select at least 2 indicators in the sidebar to enable correlation analysis."
+            fig = px.scatter(
+                corr_df,
+                x="Value_X", y="Value_Y",
+                color="Continent" if "Continent" in corr_df.columns else None,
+                hover_name="Country" if "Country" in corr_df.columns else "CountryCode",
+                trendline="ols",
+                labels={
+                    "Value_X": svc.indicator_short_name(ind_x),
+                    "Value_Y": svc.indicator_short_name(ind_y),
+                },
+                height=480,
             )
+            fig.update_layout(template="plotly_white", margin=dict(l=50, r=20, t=10, b=40))
+            st.plotly_chart(fig, use_container_width=True)
 
-    # ==== TAB 5: Data Explorer ====
-    with tabs[4]:
-        st.markdown("### 📋 Data Explorer")
+            # Interpretation
+            abs_r = abs(pearson_r)
+            strength = "strong" if abs_r > 0.7 else "moderate" if abs_r > 0.4 else "weak"
+            direction = "positive" if pearson_r > 0 else "negative"
 
-        # Display filtered data
-        display_df = filtered_df.copy()
-
-        # Column selection
-        display_cols = st.multiselect(
-            "Columns to Display",
-            options=display_df.columns.tolist(),
-            default=[c for c in ['Country', 'CountryCode', 'Year', 'Gender', 'Indicator', 'Value', 'Continent'] if c in display_df.columns]
-        )
-
-        if display_cols:
-            st.dataframe(
-                display_df[display_cols],
-                use_container_width=True,
-                hide_index=True,
-                height=400
-            )
-
-        # Summary statistics
-        st.markdown("#### Summary Statistics")
-        st.dataframe(
-            display_df.describe().round(3),
-            use_container_width=True
-        )
-
-        # Download
-        csv = display_df.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="📥 Download Filtered Data (CSV)",
-            data=csv,
-            file_name=f'who_health_data_{year_range[0]}-{year_range[1]}.csv',
-            mime='text/csv'
-        )
-
-    # ==== TAB 6: Methodology ====
-    with tabs[5]:
-        st.markdown("### ℹ️ Methodology & Data Sources")
-
-        st.markdown("""
-        <div class="methodology-panel">
-        <strong>Data Source:</strong> World Health Organization (WHO) Global Health Observatory (GHO)
-        </div>
-        """, unsafe_allow_html=True)
-
-        st.markdown("#### Data Extraction")
-        st.markdown("""
-        - **API:** WHO GHO OData API (`ghoapi.azureedge.net/api/`)
-        - **Format:** JSON (OData v2 protocol)
-        - **Indicators:** Extracted using official WHO indicator codes
-        - **Extraction Method:** HTTP GET with automatic retry and exponential backoff
-        """)
-
-        st.markdown("#### Active Indicators")
-        for ind_name in available_indicators:
-            info = WHO_INDICATORS.get(ind_name, {})
             st.markdown(
-                f"- **{get_indicator_short_name(ind_name)}** "
-                f"(`{info.get('code', 'N/A')}`): {info.get('description', 'N/A')}"
+                '<div class="panel-info">'
+                f"<strong>Data-Driven Observation:</strong> Pearson <em>r</em> = "
+                f"<strong>{pearson_r:.3f}</strong> — a <em>{strength} {direction}</em> "
+                f"statistical association across {len(corr_df)} countries in {corr_year}.<br>"
+                f"This is a <strong>statistical association</strong>, not evidence of causation."
+                "</div>",
+                unsafe_allow_html=True,
             )
 
-        st.markdown("#### Data Processing Pipeline")
-        st.markdown("""
-        1. **Extract:** Raw JSON records from WHO GHO OData API
-        2. **Validate:** Schema validation and range checks per indicator
-        3. **Transform:** Gender code normalization, type optimization, null handling
-        4. **Enrich:** Country name and continent metadata mapping
-        5. **Load:** Idempotent upsert into SQLite with UNIQUE constraints
-        6. **Monitor:** Data quality scoring and reporting
-        """)
 
-        st.markdown("#### Gender Code Mapping")
-        st.markdown("""
-        | WHO API Code | Normalized Value |
-        |---|---|
-        | `SEX_BTSX` / `BTSX` | Both sexes |
-        | `SEX_MLE` / `MLE` | Male |
-        | `SEX_FMLE` / `FMLE` | Female |
-        """)
+# ----------------------------------------------------------------
+# Tab 8: Raw Data Explorer + CSV Export
+# ----------------------------------------------------------------
+with tab_data:
+    st.markdown("### Data Explorer")
 
-        st.markdown("#### Limitations & Caveats")
-        st.markdown("""
-        <div class="warning-panel">
-        <strong>Important:</strong>
-        <ul>
-        <li>This platform presents <strong>descriptive analytics only</strong>. It does not contain validated predictive models.</li>
-        <li>Data reflects WHO GHO availability and may have gaps for certain countries, years, or demographics.</li>
-        <li>Country classification follows ISO 3166-1 alpha-3 standards. Some territories may not be represented.</li>
-        <li>Indicator values are as reported by WHO member states and may reflect different reporting methodologies.</li>
-        <li>Correlation analysis shows statistical associations only and does not establish causation.</li>
-        <li>Year-over-year changes may reflect reporting improvements rather than actual health changes.</li>
-        </ul>
-        </div>
-        """, unsafe_allow_html=True)
+    display_cols_default = [
+        c for c in ["Country", "CountryCode", "Year", "Gender", "Indicator", "Value", "Continent"]
+        if c in filtered_df.columns
+    ]
+    display_cols = st.multiselect(
+        "Columns", filtered_df.columns.tolist(), default=display_cols_default,
+    )
 
-        st.markdown("#### No ML/AI Claims")
-        st.markdown("""
-        <div class="warning-panel">
-        This platform is a <strong>public health data engineering and analytics tool</strong>.
-        It does <strong>not</strong> claim to be an AI prediction platform.
-        No machine learning models have been trained, validated, or deployed for health outcome prediction.
-        Any future forecasting capabilities would require:
-        <ul>
-        <li>Proper time-series cross-validation</li>
-        <li>Out-of-sample evaluation metrics</li>
-        <li>Uncertainty quantification (confidence/prediction intervals)</li>
-        <li>Clear disclosure of experimental status and limitations</li>
-        </ul>
-        </div>
-        """, unsafe_allow_html=True)
+    if display_cols:
+        st.dataframe(
+            filtered_df[display_cols].sort_values(["Indicator", "CountryCode", "Year"]),
+            use_container_width=True, hide_index=True, height=400,
+        )
 
-        st.markdown("#### Data Quality")
-        if not filtered_df.empty:
-            quality_report = DataQualityReport(filtered_df)
-            report = quality_report.generate_full_report()
+    # Summary statistics
+    st.markdown("##### Summary statistics")
+    st.dataframe(filtered_df.describe().round(3), use_container_width=True)
 
-            col_q1, col_q2, col_q3 = st.columns(3)
-            with col_q1:
-                st.metric("Quality Score", f"{report['overall_score']}/100")
-            with col_q2:
-                st.metric("Completeness", f"{report['completeness']['overall_completeness_pct']}%")
-            with col_q3:
-                st.metric("Countries", f"{report['geographic_coverage']['countries']}")
+    # CSV download
+    csv_bytes = svc.build_export_csv(filtered_df[display_cols] if display_cols else filtered_df)
+    st.download_button(
+        label="📥  Download filtered data (CSV)",
+        data=csv_bytes,
+        file_name=f"who_health_data_{year_range[0]}-{year_range[1]}.csv",
+        mime="text/csv",
+    )
 
 
-if __name__ == "__main__":
-    main()
+# ================================================================
+# Methodology Panel
+# ================================================================
+with st.expander("ℹ️  Methodology & data sources", expanded=False):
+    st.markdown("#### Data source")
+    st.markdown(f"- **Provider:** {source_meta['source']}")
+    st.markdown(f"- **API endpoint:** `{source_meta['api']}`")
+    st.markdown(f"- **Extraction date:** {source_meta['extraction_date'] or 'Not recorded'}")
+    st.markdown(f"- **Year range:** {source_meta['year_range']}")
+    st.markdown(f"- **Total records:** {source_meta['total_records']:,}")
+
+    st.markdown("#### Indicator definitions")
+    for ind_name in opts["indicators"]:
+        st.markdown(
+            f"- **{svc.indicator_short_name(ind_name)}** — "
+            f"{svc.indicator_description(ind_name)} "
+            f"(unit: {svc.indicator_unit(ind_name)})"
+        )
+
+    st.markdown("#### Aggregation method")
+    st.markdown(
+        "All cross-country averages shown in this dashboard are **unweighted** "
+        "(each country counted equally). **Population-weighted averages** require "
+        "population data, which is not included in the current WHO GHO extract. "
+        "If population data is integrated in the future, weighted averages will be "
+        "clearly labeled as such."
+    )
+
+    st.markdown("#### Missing data handling")
+    st.markdown(
+        "- Records with missing values are excluded from aggregation.\n"
+        "- Countries with no data for a given year are omitted from that year's calculations.\n"
+        "- The missing-value rate KPI shows the proportion of null values in the filtered dataset."
+    )
+
+    st.markdown("#### Geographic mapping")
+    st.markdown(
+        "Country codes follow **ISO 3166-1 alpha-3**. Continent assignments use "
+        "standard UN geographic regions. Some WHO-specific aggregate codes "
+        "(e.g. WB_HI, AFR) are excluded from country-level analysis."
+    )
+
+    st.markdown(
+        '<div class="panel-warning">'
+        "<strong>Disclaimer:</strong> This platform is a descriptive analytics tool. "
+        "It does not contain validated predictive models. It should not be described "
+        "as an AI prediction system."
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+# ================================================================
+# Data Quality Panel
+# ================================================================
+with st.expander("📊  Data quality", expanded=False):
+    quality_report = svc.compute_quality_report(filtered_df)
+
+    if "error" in quality_report:
+        st.warning(f"Could not compute quality report: {quality_report['error']}")
+    else:
+        q1, q2, q3, q4 = st.columns(4)
+        q1.metric("Quality score", f"{quality_report['overall_score']:.0f}/100")
+        q2.metric("Completeness", f"{quality_report['completeness']['overall_completeness_pct']:.1f}%")
+        q3.metric("Consistent", "Yes" if quality_report["consistency"]["is_consistent"] else "Issues found")
+        q4.metric("Countries", quality_report["geographic_coverage"]["countries"])
+
+        # Per-column completeness
+        st.markdown("##### Per-column completeness")
+        col_data = quality_report["completeness"]["per_column"]
+        col_table = pd.DataFrame(
+            [
+                {"Column": col, "Completeness": f"{v['completeness_score']:.1f}%", "Nulls": v["null_count"]}
+                for col, v in col_data.items()
+            ]
+        )
+        st.dataframe(col_table, use_container_width=True, hide_index=True)
+
+        # Temporal coverage
+        tc = quality_report["temporal_coverage"]
+        st.markdown(
+            f"**Temporal coverage:** {tc['years_covered']} years "
+            f"({tc['year_range'][0]}–{tc['year_range'][1]}). "
+            f"{'Gaps: ' + str(tc['year_gaps']) if tc['has_gaps'] else 'No year gaps.'}"
+        )
+
+
+# ================================================================
+# Footer
+# ================================================================
+st.divider()
+st.caption(
+    f"{DASHBOARD_TITLE}  ·  Data: WHO GHO  ·  "
+    f"Descriptive analytics only  ·  No predictive models included"
+)

@@ -39,12 +39,13 @@ who-health-intelligence/
 │   │   ├── metadata.py            # Country/continent normalization
 │   │   └── quality.py             # Data quality monitoring
 │   ├── dashboard/                  # Streamlit dashboard
-│   │   └── app.py                 # Interactive analytics UI
-│   ├── utils/                      # Shared utilities
-│   │   └── config.py              # Configuration management
-│   └── tests/                      # Unit tests
-├── tests/                          # Integration tests
+│   │   ├── services.py            # Data layer (loading, filtering, analysis)
+│   │   └── app.py                 # UI orchestration only
+│   └── utils/                      # Shared utilities
+│       └── config.py              # Configuration management
+├── tests/                          # Automated tests (94 tests)
 ├── scripts/                        # Utility scripts
+│   └── bootstrap_data.py          # Development data bootstrap
 ├── notebooks/                      # Jupyter analysis notebooks
 ├── data/                           # SQLite database (generated)
 ├── logs/                           # ETL pipeline logs
@@ -52,6 +53,16 @@ who-health-intelligence/
 ├── requirements.txt                # Python dependencies
 └── README.md                       # This file
 ```
+
+### Separation of concerns
+
+The dashboard follows strict layering:
+
+- **`services.py`** — All data logic: loading, filtering, KPI computation,
+  analytical view builders, quality reporting, metadata. Independent of
+  Streamlit so it is testable and reusable.
+- **`app.py`** — Pure UI orchestration: layout, filters, chart rendering,
+  graceful error handling. No data transformation logic.
 
 ---
 
@@ -71,7 +82,7 @@ pip install -r requirements.txt
 ### 2. Run the ETL Pipeline
 
 ```bash
-# Extract and load all default indicators
+# Extract and load all default indicators (requires WHO API access)
 python main.py etl
 
 # Extract specific indicators
@@ -79,6 +90,9 @@ python main.py etl --indicators NCD_MORTALITY UHC_COVERAGE LIFE_EXPECTANCY
 
 # Generate quality report
 python main.py quality --output data/quality_report.md
+
+# Development / offline: bootstrap with synthetic sample data
+python scripts/bootstrap_data.py
 ```
 
 ### 3. Launch the Dashboard
@@ -117,33 +131,43 @@ python main.py notebook
 
 ## Dashboard Features
 
-The interactive Streamlit dashboard provides:
+The interactive Streamlit dashboard provides 8 analytical views, a methodology
+panel, and a data quality panel. All aggregation uses clearly labeled
+**unweighted country-level averages**. Population-weighted averages are
+supported in the services layer but require external population data.
 
-### 🗺️ Geographic Analysis
-- Choropleth maps of health indicators by country
-- Country rankings and continental summaries
+### 🗺️ Geographic — Choropleth Map
+Interactive world map with per-indicator coloring and unweighted regional
+summaries.
 
-### 📈 Temporal Trends
-- Time-series analysis with confidence intervals
-- Multi-country trend comparison
+### 🏆 Country Ranking
+Horizontal bar chart ranking countries by selected indicator value.
 
-### 👥 Demographic Analysis
-- Gender-based comparisons
-- Demographic breakdown by indicator
+### 📈 Temporal Trend
+Global time-series with ±1 SD confidence band and per-country trend lines.
+Clearly labeled as unweighted country-level means.
 
-### 🔗 Cross-Indicator Correlation
-- Scatter plots with trend lines
-- Pearson correlation coefficients
+### 📊 Indicator Comparison
+Side-by-side comparison of multiple indicators across countries via a pivot table.
+
+### 🏳️ Country Profile
+Deep-dive into a single country's time-series across all selected indicators.
+
+### 📉 Distribution Analysis
+Histograms and box plots showing value distributions by region.
+
+### 🔗 Statistical Association
+Scatter plots with OLS trend lines and Pearson *r*. Labeled as **statistical
+association, not causation**. Uses the terminology "Data-Driven Observation"
+rather than "AI Insight".
 
 ### 📋 Data Explorer
-- Filterable data tables
-- Summary statistics
-- CSV export
+Filterable data table, summary statistics, and CSV export.
 
-### ℹ️ Methodology
-- Transparent data source documentation
-- Processing pipeline description
-- Limitations and caveats
+### Additional panels
+- **Methodology** — Data source, extraction date, indicator definitions,
+  missing data handling, geographic mapping, aggregation method.
+- **Data Quality** — Quality score, completeness per column, temporal coverage.
 
 ---
 
@@ -171,15 +195,16 @@ The platform monitors:
 ## Testing
 
 ```bash
-# Run all tests
+# Run all tests (94 tests across 6 modules)
 pytest tests/ -v
 
-# Run specific test module
-pytest tests/test_transform.py -v
-pytest tests/test_schema.py -v
-pytest tests/test_loader.py -v
-pytest tests/test_quality.py -v
-pytest tests/test_metadata.py -v
+# Run specific test modules
+pytest tests/test_services.py -v    # Dashboard data services (45 tests)
+pytest tests/test_transform.py -v   # ETL transform
+pytest tests/test_schema.py -v      # Schema validation
+pytest tests/test_loader.py -v      # Database loader
+pytest tests/test_quality.py -v     # Data quality
+pytest tests/test_metadata.py -v    # Country/continent metadata
 ```
 
 ---
