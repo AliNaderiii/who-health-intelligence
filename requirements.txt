@@ -1,34 +1,33 @@
-# WHO Global Health Intelligence Platform - reproducible dependencies
+# WHO Global Health Intelligence Platform - Production dependencies
 # Python: 3.9+
-#
-# Only packages imported directly by the application, ETL pipeline, dashboard,
-# notebook generator, or automated tests are listed here. sqlite3 is provided by
-# the Python standard library; SQLAlchemy, pycountry, pydantic, and pandera are
-# not used by the current codebase.
+# This project is deployable on Streamlit Community Cloud
+# https://docs.streamlit.io/streamlit-community-cloud
 
 # Core data processing
 numpy==1.26.4
 pandas==2.2.3
 
-# WHO GHO API access
+# WHO GHO API access - production client with retry, backoff, timeout
 requests==2.32.3
 urllib3==2.2.3
+
+# Country metadata - reliable ISO 3166 source, not just Plotly Gapminder
+pycountry==24.6.1
 
 # Interactive dashboard and visualization
 plotly==5.24.1
 streamlit==1.40.2
 
-# Required by plotly.express trendline="ols" in the association dashboard view
+# Required by plotly.express trendline="ols" in association view
 statsmodels==0.14.4
 
-# Notebook generation/validation
+# Notebook generation/validation (nbformat 4)
 nbformat==5.10.4
 
 # Test runner
 pytest==8.3.4
 
-# Optional notebook execution outside pytest:
-# Install these only if you want to run notebooks with Jupyter/nbconvert.
+# Optional notebook execution (install separately if needed):
 # jupyter==1.1.1
 # nbclient==0.10.1
 # ipykernel==6.29.5
