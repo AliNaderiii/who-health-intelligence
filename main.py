@@ -141,7 +141,7 @@ def cmd_dashboard(args):
 def cmd_notebook(args):
     """Generate the analysis notebook."""
     from scripts.generate_notebook import create_notebook
-    output_path = args.output or "notebooks/WHO_Health_Analysis.ipynb"
+    output_path = args.output or "WHO_Data_Extraction_ETL.ipynb"
     create_notebook(output_path)
     print(f"Notebook generated: {output_path}")
     return 0
