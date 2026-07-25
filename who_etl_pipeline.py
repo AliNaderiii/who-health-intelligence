@@ -1,6 +1,6 @@
 import requests
 import sqlite3
-import pandas as pd
+import pandas as pd 
 import logging
 from typing import Dict, List, Optional
 import time
