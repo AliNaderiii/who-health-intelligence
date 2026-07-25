@@ -1,202 +1,208 @@
 """
-Data transformation module for WHO health indicator data.
+Data transformation module - Production LIVE mode.
 
-Handles the conversion of raw WHO GHO API JSON records into clean,
-typed, validated DataFrames ready for persistence and analysis.
+Handles conversion of raw WHO GHO API JSON into clean DataFrames
+with snake_case columns required by spec plus legacy CamelCase for backward compat.
+
+Outputs columns:
+- country_code, country_name, continent, year, gender, indicator, indicator_code,
+  value, unit, source, extracted_at, pipeline_version
+- plus legacy: CountryCode, Country, Year, Gender, Indicator, IndicatorCode,
+  IndicatorDescription, Value, Continent, SourceTimestamp
 """
 
-from typing import Dict, List, Optional, Any
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
 import pandas as pd
 
-from ..utils.config import WHO_INDICATORS, setup_logging
+from ..utils.config import PIPELINE_VERSION, WHO_INDICATORS, WHO_API_BASE_URL, setup_logging
 from .schema import validate_raw_api_records, validate_transformed_dataframe
 
 logger = setup_logging(__name__)
 
-# WHO Gender code mapping
 GENDER_MAP = {
-    'SEX_BTSX': 'Both sexes',
-    'SEX_MLE': 'Male',
-    'SEX_FMLE': 'Female',
-    'BTSX': 'Both sexes',
-    'MLE': 'Male',
-    'FMLE': 'Female',
-    '': 'Total',
-    None: 'Total'
+    "SEX_BTSX": "Both sexes",
+    "SEX_MLE": "Male",
+    "SEX_FMLE": "Female",
+    "BTSX": "Both sexes",
+    "MLE": "Male",
+    "FMLE": "Female",
+    "": "Total",
+    None: "Total",
+}
+
+# Known aggregate codes to exclude from country-level analysis
+AGGREGATE_CODES = {
+    "GLOBAL",
+    "WORLD",
+    "EUR",
+    "AFR",
+    "AMR",
+    "EMR",
+    "SEAR",
+    "WPR",
+    "AFRO",
+    "AMRO",
+    "EMRO",
+    "EURO",
+    "SEARO",
+    "WPRO",
+    "WB_LI",
+    "WB_LMI",
+    "WB_UMI",
+    "WB_HI",
+    "WB_X",
 }
 
 
 def transform_indicator_records(
     records: List[Dict[str, Any]],
     indicator_name: str,
-    indicator_code: Optional[str] = None
+    indicator_code: Optional[str] = None,
+    extracted_at: Optional[str] = None,
 ) -> pd.DataFrame:
     """
-    Transform raw API records for a single indicator into a clean DataFrame.
-    
-    Processing steps:
+    Transform raw API records into clean DataFrame with both snake and legacy columns.
+
+    Steps:
     1. Validate raw records
-    2. Select and rename relevant columns
+    2. Select and rename columns to CountryCode, Year, Gender, Value (legacy)
     3. Normalize gender codes
-    4. Add indicator metadata
-    5. Clean missing values
-    6. Optimize data types for memory efficiency
-    7. Validate transformed output
-    
-    Args:
-        records: Raw JSON records from WHO GHO API
-        indicator_name: Internal indicator name (e.g., 'NCD_MORTALITY')
-        indicator_code: Optional WHO API indicator code
-        
-    Returns:
-        Cleaned and validated DataFrame
+    4. Add indicator metadata (name, code, description, unit, source, pipeline_version, extracted_at)
+    5. Clean missing values and filter aggregates
+    6. Optimize dtypes
+    7. Add snake_case columns required by spec
+    8. Validate
     """
     if not records:
         logger.warning(f"No records to transform for {indicator_name}")
         return pd.DataFrame()
-    
-    # Step 1: Validate raw records
-    validated_records, validation_stats = validate_raw_api_records(
-        records, indicator_name
-    )
-    
+
+    validated_records, validation_stats = validate_raw_api_records(records, indicator_name)
+
     if not validated_records:
         logger.error(f"All records failed validation for {indicator_name}")
         return pd.DataFrame()
-    
-    # Step 2: Create DataFrame and select columns
+
     df = pd.DataFrame(validated_records)
-    
-    # Build column mapping based on available columns
+
+    # Map raw columns to legacy CamelCase
     col_mapping = {}
     column_map = {
-        'SpatialDim': 'CountryCode',
-        'TimeDim': 'Year',
-        'Dim1': 'Gender',
-        'NumericValue': 'Value',
+        "SpatialDim": "CountryCode",
+        "TimeDim": "Year",
+        "Dim1": "Gender",
+        "NumericValue": "Value",
     }
-    
     for source, target in column_map.items():
         if source in df.columns:
             col_mapping[source] = target
-    
+
+    if not col_mapping:
+        logger.error(f"No mappable columns found for {indicator_name}, got {list(df.columns)}")
+        return pd.DataFrame()
+
     df = df[list(col_mapping.keys())].rename(columns=col_mapping)
-    
-    # Step 3: Normalize gender codes
-    if 'Gender' in df.columns:
-        df['Gender'] = df['Gender'].map(
-            lambda x: GENDER_MAP.get(x, x if x else 'Total')
-        )
+
+    # Normalize gender
+    if "Gender" in df.columns:
+        df["Gender"] = df["Gender"].map(lambda x: GENDER_MAP.get(x, x if x else "Total"))
     else:
-        df['Gender'] = 'Both sexes'
-    
-    # Step 4: Add indicator metadata
-    df['Indicator'] = indicator_name
-    df['IndicatorCode'] = indicator_code or WHO_INDICATORS.get(
-        indicator_name, {}
-    ).get('code', '')
-    df['IndicatorDescription'] = WHO_INDICATORS.get(
-        indicator_name, {}
-    ).get('description', '')
-    
-    # Step 5: Clean missing values
-    df = df.dropna(subset=['Value', 'CountryCode', 'Year'])
-    
-    # Filter out aggregate records (GLOBAL, WORLD)
-    df = df[~df['CountryCode'].isin(['GLOBAL', 'WORLD', 'EUR', 'AFR', 'AMR', 'EMR', 'SEAR', 'WPR'])]
-    
-    # Step 6: Optimize data types
+        df["Gender"] = "Both sexes"
+
+    # Indicator metadata - legacy
+    df["Indicator"] = indicator_name
+    df["IndicatorCode"] = indicator_code or WHO_INDICATORS.get(indicator_name, {}).get("code", "")
+    df["IndicatorDescription"] = WHO_INDICATORS.get(indicator_name, {}).get("description", "")
+
+    # Clean missing
+    df = df.dropna(subset=["Value", "CountryCode", "Year"])
+
+    # Filter aggregates
+    df = df[~df["CountryCode"].isin(AGGREGATE_CODES)]
+
+    # Optimize dtypes for legacy columns
     df = _optimize_dtypes(df)
-    
-    # Step 7: Validate transformed output
+
+    # Add snake_case columns required by spec + additional metadata
+    indicator_meta = WHO_INDICATORS.get(indicator_name, {})
+    unit = indicator_meta.get("unit", "")
+    source = f"WHO GHO OData API - {WHO_API_BASE_URL}{indicator_code or ''}"
+    extracted_at_val = extracted_at or datetime.now(timezone.utc).isoformat()
+
+    # Populate snake_case from legacy (ensure consistency)
+    df["country_code"] = df["CountryCode"].astype(str)
+    df["country_name"] = None  # Will be populated by geography normalization
+    df["continent"] = None  # Will be populated by geography normalization
+    df["year"] = df["Year"]
+    df["gender"] = df["Gender"]
+    df["indicator"] = df["Indicator"]
+    df["indicator_code"] = df["IndicatorCode"]
+    df["value"] = df["Value"]
+    df["unit"] = unit
+    df["source"] = source
+    df["extracted_at"] = extracted_at_val
+    df["pipeline_version"] = PIPELINE_VERSION
+
+    # Also keep legacy additional fields for backward compat
+    df["SourceTimestamp"] = extracted_at_val
+
+    # Validate transformed output (uses legacy columns check)
     validation_result = validate_transformed_dataframe(df)
-    
-    if not validation_result['is_valid']:
+
+    if not validation_result["is_valid"]:
         logger.error(
-            f"Transformed data validation failed for {indicator_name}: "
-            f"{validation_result['errors']}"
+            f"Transformed data validation failed for {indicator_name}: {validation_result['errors']}"
         )
-    
+
     logger.info(
         f"Transformed {indicator_name}: {len(df)} rows, "
-        f"{df['CountryCode'].nunique()} countries, "
-        f"{df['Year'].nunique()} years"
+        f"{df['CountryCode'].nunique() if not df.empty else 0} countries, "
+        f"{df['Year'].nunique() if not df.empty else 0} years"
     )
-    
+
     return df
 
 
 def _optimize_dtypes(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Optimize DataFrame column data types for memory efficiency.
-    
-    Converts:
-    - String columns to categorical where cardinality is low
-    - Year to int32
-    - Value to float32
-    
-    Args:
-        df: Input DataFrame
-        
-    Returns:
-        DataFrame with optimized data types
-    """
     df = df.copy()
-    
-    # Convert Year to int32
-    if 'Year' in df.columns:
-        df['Year'] = pd.to_numeric(df['Year'], errors='coerce').astype('int32')
-    
-    # Convert Value to float32
-    if 'Value' in df.columns:
-        df['Value'] = pd.to_numeric(df['Value'], errors='coerce').astype('float32')
-    
-    # Convert low-cardinality string columns to categorical
-    categorical_cols = ['CountryCode', 'Gender', 'Indicator', 'IndicatorCode', 'Continent']
+
+    if "Year" in df.columns:
+        df["Year"] = pd.to_numeric(df["Year"], errors="coerce").astype("int32")
+
+    if "Value" in df.columns:
+        df["Value"] = pd.to_numeric(df["Value"], errors="coerce").astype("float32")
+
+    categorical_cols = ["CountryCode", "Gender", "Indicator", "IndicatorCode", "Continent"]
     for col in categorical_cols:
         if col in df.columns:
             nunique = df[col].nunique()
-            if nunique < len(df) * 0.5:  # Convert if < 50% unique
-                df[col] = df[col].astype('category')
-    
-    # Drop rows with NaN values in Value
-    df = df.dropna(subset=['Value'])
-    
+            if nunique < len(df) * 0.5:
+                df[col] = df[col].astype("category")
+
+    df = df.dropna(subset=["Value"])
+
     return df
 
 
-def merge_indicator_dataframes(
-    dataframes: Dict[str, pd.DataFrame]
-) -> pd.DataFrame:
-    """
-    Merge multiple indicator DataFrames into a single unified DataFrame.
-    
-    Args:
-        dataframes: Dictionary mapping indicator names to their DataFrames
-        
-    Returns:
-        Unified DataFrame with all indicators
-    """
-    valid_dfs = [
-        df for df in dataframes.values()
-        if df is not None and not df.empty
-    ]
-    
+def merge_indicator_dataframes(dataframes: Dict[str, pd.DataFrame]) -> pd.DataFrame:
+    valid_dfs = [df for df in dataframes.values() if df is not None and not df.empty]
+
     if not valid_dfs:
         logger.error("No valid DataFrames to merge")
         return pd.DataFrame()
-    
+
     merged = pd.concat(valid_dfs, ignore_index=True)
-    
-    # Sort for optimal compression and query performance
-    sort_cols = ['Indicator', 'CountryCode', 'Year']
+
+    # Sort for optimal query performance
+    sort_cols = ["Indicator", "CountryCode", "Year"]
     existing_sort_cols = [c for c in sort_cols if c in merged.columns]
     if existing_sort_cols:
         merged = merged.sort_values(existing_sort_cols).reset_index(drop=True)
-    
-    logger.info(
-        f"Merged {len(valid_dfs)} indicator DataFrames: "
-        f"{len(merged)} total rows"
-    )
-    
+
+    logger.info(f"Merged {len(valid_dfs)} indicator DataFrames: {len(merged)} total rows")
+
     return merged

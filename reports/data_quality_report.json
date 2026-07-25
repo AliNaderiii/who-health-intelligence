@@ -1,0 +1,710 @@
+{
+  "extraction_timestamp_utc": "2026-07-25T21:16:22.573696+00:00",
+  "extraction_timestamp": "2026-07-25T21:16:22.573696+00:00",
+  "data_mode": "live",
+  "api_status": "Online",
+  "api_response_status": "Online",
+  "indicator_status": {
+    "LIFE_EXPECTANCY": {
+      "status": "success",
+      "record_count": 4
+    },
+    "NCD_MORTALITY": {
+      "status": "success",
+      "record_count": 3
+    },
+    "UHC_COVERAGE": {
+      "status": "success",
+      "record_count": 3
+    }
+  },
+  "raw_records": 10,
+  "number_of_raw_records": 10,
+  "processed_records": 10,
+  "number_of_processed_records": 10,
+  "countries": 8,
+  "number_of_countries": 8,
+  "years": 8,
+  "number_of_years": 8,
+  "year_range": [
+    2000,
+    2021
+  ],
+  "year_range_str": "2000\u20132021",
+  "missing_values": 0,
+  "invalid_numeric_values": 0,
+  "invalid_numeric": 0,
+  "duplicate_rows": 0,
+  "duplicate_key_groups": 0,
+  "unmapped_countries": {
+    "count": 0,
+    "codes": [],
+    "details": [],
+    "mapping_coverage": {
+      "total_countries": 8,
+      "mapped_countries": 8,
+      "unmapped_countries": 0,
+      "mapping_coverage_pct": 100.0,
+      "unmapped_codes": [],
+      "mapped_codes": [
+        "AGO",
+        "BTN",
+        "CZE",
+        "GAB",
+        "GBR",
+        "GMB",
+        "SOM",
+        "USA"
+      ]
+    }
+  },
+  "out_of_range_values": 0,
+  "out_of_range_details": {},
+  "indicator_coverage": {
+    "LIFE_EXPECTANCY": {
+      "row_count": 4,
+      "country_count": 4,
+      "year_count": 3,
+      "country_year_pairs": 4,
+      "max_possible_country_year_pairs": 64,
+      "coverage_pct": 6.2,
+      "year_range": [
+        2002,
+        2020
+      ]
+    },
+    "NCD_MORTALITY": {
+      "row_count": 3,
+      "country_count": 3,
+      "year_count": 3,
+      "country_year_pairs": 3,
+      "max_possible_country_year_pairs": 64,
+      "coverage_pct": 4.7,
+      "year_range": [
+        2000,
+        2021
+      ]
+    },
+    "UHC_COVERAGE": {
+      "row_count": 3,
+      "country_count": 3,
+      "year_count": 3,
+      "country_year_pairs": 3,
+      "max_possible_country_year_pairs": 64,
+      "coverage_pct": 4.7,
+      "year_range": [
+        2009,
+        2021
+      ]
+    }
+  },
+  "indicator_coverage_overall_pct": 5.2,
+  "api_latency_seconds": 1.23,
+  "api_latency": 1.23,
+  "total_duration_seconds": 2.5,
+  "total_extraction_duration": 2.5,
+  "api_calls": 3,
+  "pages_fetched": 3,
+  "overall_score": 76.0,
+  "quality_score": 76.0,
+  "is_verified": false,
+  "verification_status": "warnings",
+  "generated_at": "2026-07-25T21:16:22.607116+00:00",
+  "pipeline_version": "4.0.0",
+  "thresholds": {
+    "min_overall_score": 50,
+    "max_null_pct": 5.0,
+    "max_duplicate_pct": 1.0
+  },
+  "full_data_quality_summary": {
+    "generated_at": "2026-07-25T21:16:22.591660+00:00",
+    "schema_validation": {
+      "is_valid": true,
+      "required_columns": {
+        "is_valid": true,
+        "required_columns": [
+          "CountryCode",
+          "Year",
+          "Gender",
+          "Indicator",
+          "Value"
+        ],
+        "present_columns": [
+          "CountryCode",
+          "Year",
+          "Gender",
+          "Value",
+          "Indicator",
+          "IndicatorCode",
+          "IndicatorDescription",
+          "country_code",
+          "country_name",
+          "continent",
+          "year",
+          "gender",
+          "indicator",
+          "indicator_code",
+          "value",
+          "unit",
+          "source",
+          "extracted_at",
+          "pipeline_version",
+          "SourceTimestamp",
+          "region",
+          "Country",
+          "Continent"
+        ],
+        "missing_columns": [],
+        "extra_columns": [
+          "IndicatorCode",
+          "IndicatorDescription",
+          "country_code",
+          "country_name",
+          "continent",
+          "year",
+          "gender",
+          "indicator",
+          "indicator_code",
+          "value",
+          "unit",
+          "source",
+          "extracted_at",
+          "pipeline_version",
+          "SourceTimestamp",
+          "region",
+          "Country",
+          "Continent"
+        ]
+      },
+      "data_types": {
+        "is_valid": true,
+        "columns": {
+          "CountryCode": {
+            "expected_type": "string",
+            "actual_dtype": "str",
+            "is_valid": true,
+            "invalid_count": 0
+          },
+          "Country": {
+            "expected_type": "string",
+            "actual_dtype": "str",
+            "is_valid": true,
+            "invalid_count": 0
+          },
+          "Year": {
+            "expected_type": "integer",
+            "actual_dtype": "int32",
+            "is_valid": true,
+            "invalid_count": 0
+          },
+          "Gender": {
+            "expected_type": "string",
+            "actual_dtype": "str",
+            "is_valid": true,
+            "invalid_count": 0
+          },
+          "Indicator": {
+            "expected_type": "string",
+            "actual_dtype": "str",
+            "is_valid": true,
+            "invalid_count": 0
+          },
+          "IndicatorCode": {
+            "expected_type": "string",
+            "actual_dtype": "str",
+            "is_valid": true,
+            "invalid_count": 0
+          },
+          "Value": {
+            "expected_type": "numeric",
+            "actual_dtype": "float32",
+            "is_valid": true,
+            "invalid_count": 0
+          },
+          "Continent": {
+            "expected_type": "string",
+            "actual_dtype": "str",
+            "is_valid": true,
+            "invalid_count": 0
+          }
+        },
+        "errors": []
+      },
+      "errors": [],
+      "row_count": 10,
+      "column_count": 23
+    },
+    "overview": {
+      "total_rows": 10,
+      "total_columns": 23,
+      "memory_usage_mb": 0.01,
+      "indicators": 3,
+      "countries": 8,
+      "year_range": [
+        2000,
+        2021
+      ]
+    },
+    "completeness": {
+      "overall_completeness_pct": 100.0,
+      "total_null_cells": 0,
+      "per_column": {
+        "CountryCode": {
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "completeness_score": 100.0
+        },
+        "Year": {
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "completeness_score": 100.0
+        },
+        "Gender": {
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "completeness_score": 100.0
+        },
+        "Value": {
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "completeness_score": 100.0
+        },
+        "Indicator": {
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "completeness_score": 100.0
+        },
+        "IndicatorCode": {
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "completeness_score": 100.0
+        },
+        "IndicatorDescription": {
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "completeness_score": 100.0
+        },
+        "country_code": {
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "completeness_score": 100.0
+        },
+        "country_name": {
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "completeness_score": 100.0
+        },
+        "continent": {
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "completeness_score": 100.0
+        },
+        "year": {
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "completeness_score": 100.0
+        },
+        "gender": {
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "completeness_score": 100.0
+        },
+        "indicator": {
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "completeness_score": 100.0
+        },
+        "indicator_code": {
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "completeness_score": 100.0
+        },
+        "value": {
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "completeness_score": 100.0
+        },
+        "unit": {
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "completeness_score": 100.0
+        },
+        "source": {
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "completeness_score": 100.0
+        },
+        "extracted_at": {
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "completeness_score": 100.0
+        },
+        "pipeline_version": {
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "completeness_score": 100.0
+        },
+        "SourceTimestamp": {
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "completeness_score": 100.0
+        },
+        "region": {
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "completeness_score": 100.0
+        },
+        "Country": {
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "completeness_score": 100.0
+        },
+        "Continent": {
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "completeness_score": 100.0
+        }
+      },
+      "missing_value_profile": {
+        "row_count": 10,
+        "column_count": 23,
+        "total_cells": 230,
+        "total_missing": 0,
+        "overall_completeness_pct": 100.0,
+        "per_column": {
+          "CountryCode": {
+            "missing_count": 0,
+            "missing_percentage": 0.0,
+            "non_missing_count": 10,
+            "completeness_percentage": 100.0
+          },
+          "Year": {
+            "missing_count": 0,
+            "missing_percentage": 0.0,
+            "non_missing_count": 10,
+            "completeness_percentage": 100.0
+          },
+          "Gender": {
+            "missing_count": 0,
+            "missing_percentage": 0.0,
+            "non_missing_count": 10,
+            "completeness_percentage": 100.0
+          },
+          "Value": {
+            "missing_count": 0,
+            "missing_percentage": 0.0,
+            "non_missing_count": 10,
+            "completeness_percentage": 100.0
+          },
+          "Indicator": {
+            "missing_count": 0,
+            "missing_percentage": 0.0,
+            "non_missing_count": 10,
+            "completeness_percentage": 100.0
+          },
+          "IndicatorCode": {
+            "missing_count": 0,
+            "missing_percentage": 0.0,
+            "non_missing_count": 10,
+            "completeness_percentage": 100.0
+          },
+          "IndicatorDescription": {
+            "missing_count": 0,
+            "missing_percentage": 0.0,
+            "non_missing_count": 10,
+            "completeness_percentage": 100.0
+          },
+          "country_code": {
+            "missing_count": 0,
+            "missing_percentage": 0.0,
+            "non_missing_count": 10,
+            "completeness_percentage": 100.0
+          },
+          "country_name": {
+            "missing_count": 0,
+            "missing_percentage": 0.0,
+            "non_missing_count": 10,
+            "completeness_percentage": 100.0
+          },
+          "continent": {
+            "missing_count": 0,
+            "missing_percentage": 0.0,
+            "non_missing_count": 10,
+            "completeness_percentage": 100.0
+          },
+          "year": {
+            "missing_count": 0,
+            "missing_percentage": 0.0,
+            "non_missing_count": 10,
+            "completeness_percentage": 100.0
+          },
+          "gender": {
+            "missing_count": 0,
+            "missing_percentage": 0.0,
+            "non_missing_count": 10,
+            "completeness_percentage": 100.0
+          },
+          "indicator": {
+            "missing_count": 0,
+            "missing_percentage": 0.0,
+            "non_missing_count": 10,
+            "completeness_percentage": 100.0
+          },
+          "indicator_code": {
+            "missing_count": 0,
+            "missing_percentage": 0.0,
+            "non_missing_count": 10,
+            "completeness_percentage": 100.0
+          },
+          "value": {
+            "missing_count": 0,
+            "missing_percentage": 0.0,
+            "non_missing_count": 10,
+            "completeness_percentage": 100.0
+          },
+          "unit": {
+            "missing_count": 0,
+            "missing_percentage": 0.0,
+            "non_missing_count": 10,
+            "completeness_percentage": 100.0
+          },
+          "source": {
+            "missing_count": 0,
+            "missing_percentage": 0.0,
+            "non_missing_count": 10,
+            "completeness_percentage": 100.0
+          },
+          "extracted_at": {
+            "missing_count": 0,
+            "missing_percentage": 0.0,
+            "non_missing_count": 10,
+            "completeness_percentage": 100.0
+          },
+          "pipeline_version": {
+            "missing_count": 0,
+            "missing_percentage": 0.0,
+            "non_missing_count": 10,
+            "completeness_percentage": 100.0
+          },
+          "SourceTimestamp": {
+            "missing_count": 0,
+            "missing_percentage": 0.0,
+            "non_missing_count": 10,
+            "completeness_percentage": 100.0
+          },
+          "region": {
+            "missing_count": 0,
+            "missing_percentage": 0.0,
+            "non_missing_count": 10,
+            "completeness_percentage": 100.0
+          },
+          "Country": {
+            "missing_count": 0,
+            "missing_percentage": 0.0,
+            "non_missing_count": 10,
+            "completeness_percentage": 100.0
+          },
+          "Continent": {
+            "missing_count": 0,
+            "missing_percentage": 0.0,
+            "non_missing_count": 10,
+            "completeness_percentage": 100.0
+          }
+        }
+      }
+    },
+    "consistency": {
+      "duplicate_rows": 0,
+      "duplicate_pct": 0.0,
+      "duplicate_key_rows": 0,
+      "type_issues": [],
+      "has_duplicates": false,
+      "is_consistent": true
+    },
+    "accuracy": {
+      "issues": [],
+      "invalid_value_count": 0,
+      "invalid_numeric_values": {
+        "columns": {
+          "Value": {
+            "exists": true,
+            "missing_count": 0,
+            "non_numeric_count": 0,
+            "infinite_count": 0,
+            "below_min_count": 0,
+            "above_max_count": 0,
+            "invalid_count": 0,
+            "range_issues": {}
+          }
+        },
+        "invalid_value_count": 0,
+        "sample_invalid_rows": [],
+        "is_valid": true
+      },
+      "year_range_validation": {
+        "is_valid": true,
+        "years_covered": 8,
+        "year_range": [
+          2000,
+          2021
+        ],
+        "year_gaps": [
+          2001,
+          2003,
+          2004,
+          2005,
+          2006,
+          2007,
+          2010,
+          2011,
+          2012,
+          2014,
+          2015,
+          2016,
+          2017,
+          2018
+        ],
+        "has_gaps": true,
+        "min_allowed_year": 1900,
+        "max_allowed_year": 2030,
+        "below_min_count": 0,
+        "above_max_count": 0,
+        "invalid_year_count": 0
+      },
+      "country_code_validation": {
+        "is_valid": true,
+        "country_count": 8,
+        "valid_country_count": 8,
+        "invalid_country_count": 0,
+        "invalid_codes": [],
+        "malformed_codes": []
+      },
+      "is_accurate": true
+    },
+    "indicator_summary": [
+      {
+        "indicator": "LIFE_EXPECTANCY",
+        "row_count": 4,
+        "country_count": 4,
+        "year_count": 3,
+        "value_mean": 68.5458,
+        "value_min": 48.0375,
+        "value_max": 81.3,
+        "value_std": 14.7786,
+        "null_count": 0
+      },
+      {
+        "indicator": "NCD_MORTALITY",
+        "row_count": 3,
+        "country_count": 3,
+        "year_count": 3,
+        "value_mean": 21.4,
+        "value_min": 15.2,
+        "value_max": 27.8,
+        "value_std": 6.3024,
+        "null_count": 0
+      },
+      {
+        "indicator": "UHC_COVERAGE",
+        "row_count": 3,
+        "country_count": 3,
+        "year_count": 3,
+        "value_mean": 73.0,
+        "value_min": 52.0,
+        "value_max": 85.0,
+        "value_std": 18.2483,
+        "null_count": 0
+      }
+    ],
+    "indicator_coverage": {
+      "indicators": {
+        "LIFE_EXPECTANCY": 6.2,
+        "NCD_MORTALITY": 4.7,
+        "UHC_COVERAGE": 4.7
+      },
+      "details": {
+        "LIFE_EXPECTANCY": {
+          "row_count": 4,
+          "country_count": 4,
+          "year_count": 3,
+          "country_year_pairs": 4,
+          "max_possible_country_year_pairs": 64,
+          "coverage_pct": 6.2,
+          "year_range": [
+            2002,
+            2020
+          ]
+        },
+        "NCD_MORTALITY": {
+          "row_count": 3,
+          "country_count": 3,
+          "year_count": 3,
+          "country_year_pairs": 3,
+          "max_possible_country_year_pairs": 64,
+          "coverage_pct": 4.7,
+          "year_range": [
+            2000,
+            2021
+          ]
+        },
+        "UHC_COVERAGE": {
+          "row_count": 3,
+          "country_count": 3,
+          "year_count": 3,
+          "country_year_pairs": 3,
+          "max_possible_country_year_pairs": 64,
+          "coverage_pct": 4.7,
+          "year_range": [
+            2009,
+            2021
+          ]
+        }
+      },
+      "overall_coverage_pct": 5.2
+    },
+    "temporal_coverage": {
+      "is_valid": true,
+      "years_covered": 8,
+      "year_range": [
+        2000,
+        2021
+      ],
+      "year_gaps": [
+        2001,
+        2003,
+        2004,
+        2005,
+        2006,
+        2007,
+        2010,
+        2011,
+        2012,
+        2014,
+        2015,
+        2016,
+        2017,
+        2018
+      ],
+      "has_gaps": true,
+      "min_allowed_year": 1900,
+      "max_allowed_year": 2030,
+      "below_min_count": 0,
+      "above_max_count": 0,
+      "invalid_year_count": 0
+    },
+    "geographic_coverage": {
+      "countries": 8,
+      "continents": 4,
+      "has_aggregate_records": false,
+      "expected_countries": 192
+    },
+    "unmapped_countries": {
+      "count": 0,
+      "codes": [],
+      "details": []
+    },
+    "overall_score": 76.0
+  },
+  "quality_issues": [],
+  "has_critical_issues": false
+}

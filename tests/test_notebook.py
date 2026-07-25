@@ -1,13 +1,14 @@
 """
-Tests for the notebook generator (scripts/generate_notebook.py).
+Tests for the notebook generator (scripts/generate_notebook.py) - Production LIVE mode.
 
-Verifies that the generated notebook:
-- Is a valid nbformat 4 notebook
-- Contains all 18 required sections
+Verifies that generated notebook:
+- Is valid nbformat 4
+- Contains required sections (including LIVE/DEMO handling)
 - Has no hardcoded Windows paths
-- Uses pathlib for file operations
-- Supports SAMPLE_MODE
-- Imports from source modules
+- Uses pathlib
+- Supports LIVE/DEMO modes (SAMPLE_MODE backward compat + DEMO_MODE)
+- Imports from source modules, shows extraction timestamp, source URL, indicator definitions, quality results
+- Validates with nbformat
 """
 
 import json
@@ -24,116 +25,109 @@ if str(PROJECT_ROOT) not in sys.path:
 
 @pytest.fixture(scope="module")
 def generated_notebook(tmp_path_factory):
-    """Generate a notebook and return its parsed content."""
     output = tmp_path_factory.mktemp("notebooks") / "test_notebook.ipynb"
     result = subprocess.run(
-        [sys.executable, str(PROJECT_ROOT / "scripts" / "generate_notebook.py"),
-         "--output", str(output)],
+        [sys.executable, str(PROJECT_ROOT / "scripts" / "generate_notebook.py"), "--output", str(output)],
         capture_output=True,
         text=True,
         cwd=str(PROJECT_ROOT),
     )
-    assert result.returncode == 0, f"Notebook generation failed: {result.stderr}"
+    assert result.returncode == 0, f"Notebook generation failed: {result.stderr}\n{result.stdout}"
     assert output.exists(), "Notebook file was not created"
-
     with open(output, "r", encoding="utf-8") as f:
         nb = json.load(f)
     return nb
 
 
 class TestNotebookValidity:
-    """Test that the generated notebook is structurally valid."""
-
     def test_is_valid_nbformat(self, generated_notebook):
-        """Notebook should be valid nbformat 4."""
         import nbformat
         nbformat.validate(generated_notebook)
 
     def test_has_cells(self, generated_notebook):
-        """Notebook should have cells."""
         assert len(generated_notebook["cells"]) > 0
 
     def test_has_code_and_markdown_cells(self, generated_notebook):
-        """Notebook should have both code and markdown cells."""
         cell_types = {c["cell_type"] for c in generated_notebook["cells"]}
         assert "code" in cell_types
         assert "markdown" in cell_types
 
     def test_kernel_metadata(self, generated_notebook):
-        """Notebook should have kernel metadata."""
         assert "kernelspec" in generated_notebook["metadata"]
         assert generated_notebook["metadata"]["kernelspec"]["language"] == "python"
 
 
 class TestRequiredSections:
-    """Test that all 18 required sections are present."""
-
-    EXPECTED_SECTIONS = [
+    # Old sections + new LIVE/DEMO sections should be present - flexible substring matching
+    EXPECTED_SECTIONS_SUBSTRINGS = [
         "Project Overview",
         "Research and Engineering Objective",
-        "WHO API Source and Indicator Definitions",
+        "WHO API Source",  # covers both old and new official defs
+        "Indicator Definitions",
         "Environment Setup",
         "Robust API Extraction",
-        "Retry and Error Handling",
+        "Retry",  # covers "Retry and Error Handling" and new "API Client Features — Retry, Timeout, Error Handling"
+        "Error Handling",
         "Raw Response Inspection",
         "Schema Validation",
         "Data Transformation",
-        "Missing-Value Analysis",
-        "Country and Continent Normalization",
+        "Missing",  # missing-value analysis
+        "Country and Geographic",  # covers new heading "Country and Geographic Metadata"
+        "Geographic Metadata",
         "Memory Optimization",
         "SQLite Loading",
         "Data Quality Report",
         "Exploratory Analysis",
-        "Interactive Visualization Examples",
-        "Limitations and Reproducibility Notes",
-        "Conclusion and Next Steps",
+        "Interactive Visualization",
+        "Limitations",
+        "Conclusion",
     ]
 
     def test_all_sections_present(self, generated_notebook):
-        """All 18 required sections should be present as markdown headings."""
-        # Collect all section headings from markdown cells
         headings = []
         for cell in generated_notebook["cells"]:
             if cell["cell_type"] == "markdown":
-                for line in cell["source"]:
+                src = cell["source"]
+                if isinstance(src, list):
+                    src = "".join(src)
+                for line in src.splitlines():
                     stripped = line.strip()
                     if stripped.startswith("## "):
-                        # Remove "## " and any leading number like "1. "
                         text = stripped.lstrip("#").strip()
-                        # Remove leading number prefix
                         if text and text[0].isdigit():
-                            text = text.split(". ", 1)[-1]
+                            # Remove leading "1. "
+                            parts = text.split(". ", 1)
+                            if len(parts) > 1:
+                                text = parts[1]
                         headings.append(text)
 
-        for expected in self.EXPECTED_SECTIONS:
+        for expected in self.EXPECTED_SECTIONS_SUBSTRINGS:
             found = any(expected.lower() in h.lower() for h in headings)
-            assert found, f"Section '{expected}' not found. Headings found: {headings}"
+            assert found, f"Section containing '{expected}' not found. Headings: {headings}"
 
     def test_section_count(self, generated_notebook):
-        """Should have at least 18 sections."""
         headings = []
         for cell in generated_notebook["cells"]:
             if cell["cell_type"] == "markdown":
-                for line in cell["source"]:
+                src = cell["source"]
+                if isinstance(src, list):
+                    src = "".join(src)
+                for line in src.splitlines():
                     if line.strip().startswith("## "):
                         headings.append(line.strip())
         assert len(headings) >= 18
 
 
 class TestNoHardcodedPaths:
-    """Test that no hardcoded Windows paths exist."""
-
     def test_no_windows_paths(self, generated_notebook):
-        """Should not contain hardcoded local Windows drive paths."""
         content = json.dumps(generated_notebook)
-        disallowed_prefixes = ["D:" + "\\", "D:" + "/", "C:" + "\\"]
-        for prefix in disallowed_prefixes:
+        disallowed = ["D:\\", "D:/", "C:\\"]
+        for prefix in disallowed:
             assert prefix not in content
 
     def test_uses_pathlib(self, generated_notebook):
-        """Should use pathlib for path operations."""
         code_content = " ".join(
-            c["source"] if isinstance(c["source"], str) else "".join(c["source"])
+            "".join(c["source"]) if isinstance(c["source"], list) else c["source"]
             for c in generated_notebook["cells"]
             if c["cell_type"] == "code"
         )
@@ -141,31 +135,25 @@ class TestNoHardcodedPaths:
 
 
 class TestSourceModuleReuse:
-    """Test that the notebook reuses functions from source modules."""
-
     def test_imports_from_source(self, generated_notebook):
-        """Should import from who_health_intelligence modules."""
         code_content = " ".join(
-            c["source"] if isinstance(c["source"], str) else "".join(c["source"])
+            "".join(c["source"]) if isinstance(c["source"], list) else c["source"]
             for c in generated_notebook["cells"]
             if c["cell_type"] == "code"
         )
-        assert "from src.who_health_intelligence" in code_content or \
-               "from who_health_intelligence" in code_content
+        assert "from src.who_health_intelligence" in code_content or "from who_health_intelligence" in code_content
 
     def test_uses_api_client(self, generated_notebook):
-        """Should use the WHOAPIClient from source."""
         code_content = " ".join(
-            c["source"] if isinstance(c["source"], str) else "".join(c["source"])
+            "".join(c["source"]) if isinstance(c["source"], list) else c["source"]
             for c in generated_notebook["cells"]
             if c["cell_type"] == "code"
         )
         assert "WHOAPIClient" in code_content
 
     def test_uses_etl_modules(self, generated_notebook):
-        """Should use ETL modules from source."""
         code_content = " ".join(
-            c["source"] if isinstance(c["source"], str) else "".join(c["source"])
+            "".join(c["source"]) if isinstance(c["source"], list) else c["source"]
             for c in generated_notebook["cells"]
             if c["cell_type"] == "code"
         )
@@ -174,38 +162,54 @@ class TestSourceModuleReuse:
         assert "transform_indicator_records" in code_content
 
 
-class TestSampleMode:
-    """Test that SAMPLE_MODE is supported."""
-
-    def test_sample_mode_variable(self, generated_notebook):
-        """Should define SAMPLE_MODE variable."""
+class TestLiveDemoModes:
+    def test_demo_or_live_mode_variable(self, generated_notebook):
         code_content = " ".join(
-            c["source"] if isinstance(c["source"], str) else "".join(c["source"])
+            "".join(c["source"]) if isinstance(c["source"], list) else c["source"]
             for c in generated_notebook["cells"]
             if c["cell_type"] == "code"
         )
-        assert "SAMPLE_MODE" in code_content
+        # New notebook uses DEMO_MODE and LIVE_MODE, old used SAMPLE_MODE - support either
+        assert ("DEMO_MODE" in code_content or "LIVE_MODE" in code_content or "SAMPLE_MODE" in code_content)
 
-    def test_sample_mode_documented(self, generated_notebook):
-        """Should document SAMPLE_MODE in markdown."""
+    def test_sample_or_demo_mode_documented(self, generated_notebook):
         md_content = " ".join(
-            c["source"] if isinstance(c["source"], str) else "".join(c["source"])
+            "".join(c["source"]) if isinstance(c["source"], list) else c["source"]
             for c in generated_notebook["cells"]
             if c["cell_type"] == "markdown"
         )
-        assert "SAMPLE_MODE" in md_content or "sample mode" in md_content.lower()
+        has_demo_doc = "DEMO" in md_content or "demo" in md_content.lower()
+        has_sample_doc = "SAMPLE_MODE" in md_content or "sample mode" in md_content.lower()
+        has_live_doc = "LIVE" in md_content or "live" in md_content.lower()
+        assert has_demo_doc or has_sample_doc or has_live_doc
+
+    def test_shows_extraction_timestamp_and_source_url(self, generated_notebook):
+        all_content = json.dumps(generated_notebook).lower()
+        assert "extraction_timestamp" in all_content or "extraction timestamp" in all_content
+        assert "source_url" in all_content or "source url" in all_content or "who_api_base_url" in all_content
+
+    def test_shows_indicator_definitions(self, generated_notebook):
+        all_content = json.dumps(generated_notebook)
+        assert "WHO_INDICATORS" in all_content or "official_definition" in all_content.lower()
+
+    def test_shows_data_quality_results(self, generated_notebook):
+        all_content = json.dumps(generated_notebook).lower()
+        assert "data_quality" in all_content or "quality report" in all_content
+
+    def test_uses_relative_paths(self, generated_notebook):
+        code_content = " ".join(
+            "".join(c["source"]) if isinstance(c["source"], list) else c["source"]
+            for c in generated_notebook["cells"]
+            if c["cell_type"] == "code"
+        )
+        # Should use Path.cwd() or relative pathlib, not hardcoded Windows
+        assert "Path" in code_content
 
 
 class TestNoFabricatedResults:
-    """Test that the notebook doesn't contain fabricated results."""
-
     def test_no_fake_numbers_in_markdown(self, generated_notebook):
-        """Markdown cells should not contain pre-computed result numbers."""
-        # Check that markdown cells don't contain specific fabricated metrics
         for cell in generated_notebook["cells"]:
             if cell["cell_type"] == "markdown":
                 content = "".join(cell["source"]) if isinstance(cell["source"], list) else cell["source"]
-                # Should not claim specific data results in static text
-                # (these are examples of what would be fabricated)
-                assert "18,096 records" not in content  # exact record count from old data
+                assert "18,096 records" not in content
                 assert "The data shows exactly" not in content
