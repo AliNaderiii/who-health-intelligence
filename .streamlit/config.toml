@@ -7,7 +7,9 @@ font = "sans serif"
 
 [server]
 headless = true
-enableCORS = false
+# enableCORS is intentionally left at its default (true): setting it to false
+# while enableXsrfProtection is true is incompatible and is overridden at
+# startup, producing a warning in the deployment log.
 enableXsrfProtection = true
 maxUploadSize = 200
 

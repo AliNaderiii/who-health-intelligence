@@ -17,13 +17,19 @@ Implements production requirements:
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
+# Streamlit runs this file as a script, so only its own directory is on sys.path.
+# Both the repository root (for ``src.*`` imports) and ``src`` (for the
+# ``who_health_intelligence`` package) must be added explicitly, otherwise the
+# app crashes on import when it is launched without a preset PYTHONPATH — which
+# is exactly how Streamlit Community Cloud starts it.
+_PACKAGE_ROOT = Path(__file__).resolve().parent.parent.parent  # <repo>/src
+_PROJECT_ROOT = _PACKAGE_ROOT.parent  # <repo>
+for _path in (str(_PROJECT_ROOT), str(_PACKAGE_ROOT)):
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
 
 import pandas as pd
 import streamlit as st
@@ -37,9 +43,10 @@ from who_health_intelligence.utils.config import (
     DASHBOARD_SUBTITLE,
     WHO_API_BASE_URL,
     WHO_REFRESH_TTL,
-    get_data_mode,
+    WHO_INDICATORS,
+    REPORTS_DIR,
 )
-from who_health_intelligence.utils.data_mode import get_current_data_mode, DataMode, get_data_status
+from who_health_intelligence.utils.data_mode import get_current_data_mode, DataMode
 
 # Page config must be first Streamlit call
 st.set_page_config(
@@ -88,17 +95,51 @@ st.markdown(
 # ------------------------------------------------------------------
 # Data loading with caching TTL from env
 # ------------------------------------------------------------------
-@st.cache_data(show_spinner="Loading health data …", ttl=WHO_REFRESH_TTL)
+#
+# IMPORTANT (Streamlit Cloud startup): no extraction work happens at import
+# time. The app shell above is rendered first, then this controlled loader runs
+# inside a visible status container. It reads the local snapshot and only
+# performs a real WHO API request when LIVE mode has no snapshot at all.
+@st.cache_data(show_spinner=False, ttl=WHO_REFRESH_TTL)
 def _cached_load(db_path: str):
-    return svc.load_full_dataset(db_path)
+    return svc.load_dashboard_data(db_path)
 
-df, db_meta = _cached_load(str(DATABASE_PATH))
+
+_startup_status = st.empty()
+_needs_live_fetch = (
+    get_current_data_mode() == DataMode.LIVE
+    and svc.auto_bootstrap_enabled()
+    and not svc.database_has_records(str(DATABASE_PATH))
+)
+
+if _needs_live_fetch:
+    _startup_status.info(
+        "⏳ Starting up — no local WHO snapshot found. Requesting LIVE data from "
+        f"`{WHO_API_BASE_URL}`. This first load can take up to a few minutes."
+    )
+else:
+    _startup_status.info("⏳ Loading health data …")
+
+with st.spinner("Loading health data …"):
+    df, db_meta = _cached_load(str(DATABASE_PATH))
+
+_startup_status.empty()
 
 # ------------------------------------------------------------------
 # Data mode and status handling
 # ------------------------------------------------------------------
 current_mode = get_current_data_mode()
-data_status = svc.get_data_mode_status(str(DATABASE_PATH))
+
+# If the controlled loader attempted a live extraction and it failed, propagate
+# the reason so the status panel can render STALE REAL DATA / LIVE DATA
+# UNAVAILABLE instead of an unqualified LIVE label.
+_bootstrap_result = db_meta.get("bootstrap_result") or {}
+_startup_failure_reason = (
+    None if _bootstrap_result.get("success", True) else _bootstrap_result.get("failure_reason")
+)
+data_status = svc.get_data_mode_status(
+    str(DATABASE_PATH), api_failure_reason=_startup_failure_reason
+)
 
 # Determine status colors and banners
 data_mode_label = data_status.get("data_mode", db_meta.get("data_mode", "UNKNOWN"))
@@ -232,12 +273,13 @@ if st.button("🔄 Refresh Data from WHO API (LIVE)", help="Trigger real API ref
         # Rerun to reload
         st.rerun()
 
-# Show last quality report if available
-if Path("reports/data_quality_report.json").exists():
+# Show last quality report if available (resolved from config, never a hardcoded local path)
+_quality_report_path = Path(REPORTS_DIR) / "data_quality_report.json"
+if _quality_report_path.exists():
     with st.expander("📋 Latest Data Quality Report (JSON snapshot)", expanded=False):
         try:
             import json
-            q_content = json.loads(Path("reports/data_quality_report.json").read_text(encoding="utf-8"))
+            q_content = json.loads(_quality_report_path.read_text(encoding="utf-8"))
             st.json(q_content)
         except Exception as e:
             st.write(f"Could not load quality report JSON: {e}")

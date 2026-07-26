@@ -2,7 +2,7 @@
 
 **Public Health Data Engineering, Epidemiological Analytics, and Interactive Business Intelligence**
 
-[![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/)
+[![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Streamlit Cloud](https://img.shields.io/badge/deploy-Streamlit%20Cloud-red.svg)](https://streamlit.io/cloud)
 
@@ -192,16 +192,41 @@ WHO_DATA_MODE=demo streamlit run src/who_health_intelligence/dashboard/app.py
 
 ## Installation
 
+**Python 3.12 is required.** The runtime is pinned for every environment (local, CI and Streamlit Community Cloud) by two root-level files:
+
+- `runtime.txt` — contains `python-3.12`
+- `.python-version` — contains `3.12`
+
+Newer interpreters (3.13/3.14) are not supported: the pinned scientific stack
+(`numpy`, `pandas`, `statsmodels`, and Streamlit's `pyarrow`/`scipy` transitives)
+does not publish prebuilt wheels for them, so the dependency step falls back to
+compiling from source and never finishes on a hosted builder.
+
 ```bash
 git clone https://github.com/AliNaderiii/who-health-intelligence.git
 cd who-health-intelligence
-python -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install --upgrade pip
+
+# Runtime dependencies only (what the deployed dashboard imports)
 pip install -r requirements.txt
+
+# Runtime + test/development tooling (pytest, nbformat, pyflakes)
+pip install -r requirements-dev.txt
 ```
 
-Dependencies include `pycountry` for reliable ISO 3166 country metadata (not only Plotly Gapminder).
+### Dependency layout
+
+| File | Contents | Installed on Streamlit Cloud |
+|---|---|---|
+| `requirements.txt` | `streamlit`, `pandas`, `numpy`, `plotly`, `requests`, `urllib3`, `pycountry`, `statsmodels` | Yes |
+| `requirements-dev.txt` | `pytest`, `nbformat`, `pyflakes` (plus `requirements.txt`) | No |
+
+`nbformat` is only used by `scripts/generate_notebook.py` and its tests, never by
+the deployed dashboard, so it is a development dependency. `statsmodels` stays in
+the runtime set because `plotly.express` needs it for the `trendline="ols"` fit in
+the association view. `pycountry` supplies ISO 3166 country metadata.
 
 ---
 
@@ -214,6 +239,7 @@ Dependencies include `pycountry` for reliable ISO 3166 country metadata (not onl
 | `WHO_API_TIMEOUT` | Request timeout seconds | `30` | No |
 | `WHO_API_MAX_RETRIES` | Max retry attempts | `3` | No |
 | `WHO_REFRESH_TTL` | Streamlit cache TTL seconds | `3600` | No |
+| `WHO_AUTO_BOOTSTRAP` | Allow one first-run LIVE extraction when no local snapshot exists | `true` | No |
 | `WHO_DB_PATH` | SQLite database path | `data/who_health_data.db` | No |
 | `WHO_DATA_DIR` | Base data directory | `data/` | No |
 | `LOG_LEVEL` | Logging level | `INFO` | No |
@@ -456,16 +482,22 @@ Example JSON structure:
 
 ### Files
 
-- `requirements.txt` — includes `pycountry`, `streamlit`, `plotly`, `pandas`, `requests`, `statsmodels`, `nbformat`, `pytest`
-- `.streamlit/config.toml` — theme, server headless, CORS disabled, usage stats disabled, max upload 200
+- `runtime.txt` — `python-3.12`, pins the deployment interpreter
+- `.python-version` — `3.12`, read by uv-based builders and local version managers
+- `requirements.txt` — runtime dependencies only (`streamlit`, `pandas`, `numpy`, `plotly`, `requests`, `urllib3`, `pycountry`, `statsmodels`)
+- `requirements-dev.txt` — test and tooling dependencies, not installed on Streamlit Cloud
+- `.streamlit/config.toml` — theme, server headless, usage stats disabled, max upload 200
 - `.env.example` — documents all env vars
 - `README.md` — this file
 
 ### Streamlit Cloud Configuration
 
 1. Connect repository `AliNaderiii/who-health-intelligence` to Streamlit Cloud
-2. Main file path: `src/who_health_intelligence/dashboard/app.py`
-3. Python version: 3.9+
+2. **Main file path:** `src/who_health_intelligence/dashboard/app.py`
+3. **Python version: 3.12.** `runtime.txt` and `.python-version` declare it, and it
+   should also be selected under *Advanced settings → Python version* when the app
+   is created, because the Community Cloud UI setting takes precedence over the
+   repository files.
 4. Environment variables (via Streamlit Cloud secrets or env):
    ```
    WHO_DATA_MODE=live
@@ -475,7 +507,37 @@ Example JSON structure:
    WHO_REFRESH_TTL=3600
    WHO_DB_PATH=data/who_health_data.db
    ```
-5. No secrets required for public WHO GHO API
+5. No secrets required for the public WHO GHO API
+
+Verify the entry point locally before deploying:
+
+```bash
+streamlit run src/who_health_intelligence/dashboard/app.py --server.headless true
+```
+
+### Startup behaviour
+
+The dashboard performs **no** extraction at module import time. Startup order is:
+
+1. Streamlit imports the app module and renders the page shell, header and CSS.
+2. A status placeholder shows a loading / first-run message.
+3. The controlled loader (`services.load_dashboard_data`, wrapped in
+   `st.cache_data` with `WHO_REFRESH_TTL`) reads the local snapshot and, only in
+   LIVE mode with no snapshot at all, issues one real WHO API request.
+4. The status panel renders **LIVE**, **STALE REAL DATA**, **LIVE DATA UNAVAILABLE**
+   or **DEMO DATA — NOT OFFICIAL WHO OBSERVATIONS**.
+
+A failed live request is always reported as a failure. Synthetic data is never
+substituted for live data. Set `WHO_AUTO_BOOTSTRAP=false` to disable the first-run
+extraction and rely solely on an existing snapshot plus the **Refresh Data** button.
+
+### Troubleshooting: build never reaches the Streamlit startup stage
+
+If the deployment log repeats *Processing dependencies* / *Resolved N packages*
+without ever starting the server, the builder is using an unsupported interpreter
+(for example Python 3.14) and is compiling `numpy`, `pandas`, `pyarrow` and `scipy`
+from source. Fix it by pinning Python 3.12 in the app's advanced settings and
+confirming that `runtime.txt` contains `python-3.12`, then reboot the app.
 
 ### SQLite Persistence Limitation on Streamlit Cloud
 
@@ -630,7 +692,7 @@ MIT License — see [LICENSE](LICENSE)
 
 ## Author
 
-**Ali Naderi** — Repository: https://github.com/AliNaderiii/who-health-intelligence — Focus: public health data engineering, epidemiological analytics, interactive business intelligence
+Maintained by **Ali Naderi** — Repository: https://github.com/AliNaderiii/who-health-intelligence — Focus: public health data engineering, epidemiological analytics, interactive business intelligence
 
 ---
 
@@ -648,11 +710,12 @@ Known limitations documented above: Streamlit Cloud SQLite ephemerality, WHO dat
 
 ## Deployment Instructions Summary
 
+0. Use Python 3.12 (`runtime.txt` / `.python-version`)
 1. Set env vars: `WHO_DATA_MODE=live`, `WHO_API_BASE_URL`, `WHO_API_TIMEOUT=30`, `WHO_API_MAX_RETRIES=3`, `WHO_REFRESH_TTL=3600`, `WHO_DB_PATH`
-2. Install: `pip install -r requirements.txt`
+2. Install: `pip install -r requirements.txt` (add `-r requirements-dev.txt` for tests)
 3. Validate API: `python main.py validate-api`
 4. ETL LIVE: `WHO_DATA_MODE=live python main.py etl`
 5. Dashboard: `WHO_DATA_MODE=live streamlit run src/who_health_intelligence/dashboard/app.py`
-6. For Streamlit Cloud: connect repo, set main file, set env vars in secrets, note SQLite non-persistent, consider PostgreSQL/Supabase/S3 for persistence
+6. For Streamlit Cloud: connect repo, set main file `src/who_health_intelligence/dashboard/app.py`, select Python 3.12, set env vars in secrets, note SQLite non-persistent, consider PostgreSQL/Supabase/S3 for persistence
 7. Data quality report: `reports/data_quality_report.json` and DB table `data_quality_results`
 8. Refresh button in dashboard triggers real API refresh, shows progress, clears cache, no duplicates
