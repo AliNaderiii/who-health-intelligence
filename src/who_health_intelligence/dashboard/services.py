@@ -265,9 +265,106 @@ def load_full_dataset(db_path: str = DATABASE_PATH) -> Tuple[pd.DataFrame, Dict[
         return pd.DataFrame(), metadata
 
 
-def get_data_mode_status(db_path: str = DATABASE_PATH) -> Dict[str, Any]:
+def get_data_mode_status(
+    db_path: str = DATABASE_PATH,
+    api_failure_reason: Optional[str] = None,
+) -> Dict[str, Any]:
     """Wrapper for get_data_status with Path handling."""
-    return get_data_status(db_path=Path(db_path))
+    return get_data_status(db_path=Path(db_path), api_failure_reason=api_failure_reason)
+
+
+def auto_bootstrap_enabled() -> bool:
+    """
+    Whether the dashboard may perform a first-run LIVE extraction when no local
+    snapshot exists (e.g. on Streamlit Community Cloud, where the SQLite file is
+    not persisted between deployments).
+
+    Controlled by WHO_AUTO_BOOTSTRAP (default: enabled). Never applies to DEMO
+    mode and never produces synthetic data.
+    """
+    import os
+
+    raw = os.environ.get("WHO_AUTO_BOOTSTRAP", "true").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+def database_has_records(db_path: str = DATABASE_PATH) -> bool:
+    """Cheap check for an existing usable snapshot without loading the dataset."""
+    import sqlite3
+
+    db_file = Path(db_path)
+    if not db_file.exists() or db_file.stat().st_size == 0:
+        return False
+    try:
+        conn = sqlite3.connect(str(db_file))
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='health_indicators'"
+            )
+            if cur.fetchone() is None:
+                return False
+            cur.execute("SELECT COUNT(*) FROM health_indicators")
+            return int(cur.fetchone()[0]) > 0
+        finally:
+            conn.close()
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning(f"Could not inspect database at {db_path}: {exc}")
+        return False
+
+
+def load_dashboard_data(
+    db_path: str = DATABASE_PATH,
+    allow_live_bootstrap: bool = True,
+) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    """
+    Controlled data-loading entry point used by the dashboard.
+
+    This function is intentionally the ONLY place that may trigger a live WHO
+    API extraction for the dashboard. It is never executed at module import
+    time, so the Streamlit app can render its shell and status panel first.
+
+    Behaviour:
+    - If a local snapshot exists, it is loaded and returned (LIVE or STALE REAL DATA).
+    - If LIVE mode is active, no snapshot exists and bootstrapping is allowed,
+      a single real WHO API extraction is attempted.
+    - If that extraction fails, the failure is reported and NO synthetic data is
+      substituted.
+    - DEMO mode never triggers an extraction from here.
+    """
+    df, metadata = load_full_dataset(db_path)
+
+    if not df.empty:
+        return df, metadata
+
+    mode = get_current_data_mode()
+    if mode != DataMode.LIVE:
+        return df, metadata
+
+    if not (allow_live_bootstrap and auto_bootstrap_enabled()):
+        metadata["bootstrap_attempted"] = False
+        return df, metadata
+
+    logger.info(
+        "No local WHO snapshot found in LIVE mode - performing first-run live extraction"
+    )
+    refresh_result = trigger_live_refresh(db_path=db_path)
+    metadata["bootstrap_attempted"] = True
+    metadata["bootstrap_result"] = refresh_result
+
+    if not refresh_result.get("success"):
+        metadata["failure_reason"] = (
+            refresh_result.get("failure_reason")
+            or metadata.get("failure_reason")
+            or "Live WHO API extraction failed and no cached real snapshot exists."
+        )
+        metadata["api_status"] = APIStatus.FAILED.value
+        return df, metadata
+
+    df, metadata = load_full_dataset(db_path)
+    metadata["bootstrap_attempted"] = True
+    metadata["bootstrap_result"] = refresh_result
+    return df, metadata
 
 
 # ------------------------------------------------------------------

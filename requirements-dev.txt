@@ -1,0 +1,26 @@
+# WHO Global Health Intelligence Platform - Development and test dependencies
+#
+# Target runtime: Python 3.12 (see runtime.txt / .python-version)
+#
+# These packages are NOT required by the deployed Streamlit application and are
+# deliberately excluded from requirements.txt to keep the Streamlit Community
+# Cloud dependency resolution small and fast.
+#
+# Install with:
+#   pip install -r requirements.txt -r requirements-dev.txt
+
+-r requirements.txt
+
+# Test runner
+pytest==8.3.4
+
+# Notebook generation and validation (scripts/generate_notebook.py, tests/test_notebook.py)
+nbformat==5.10.4
+
+# Static analysis
+pyflakes==3.2.0
+
+# Optional notebook execution (uncomment if you want to execute the notebook)
+# jupyter==1.1.1
+# nbclient==0.10.1
+# ipykernel==6.29.5
