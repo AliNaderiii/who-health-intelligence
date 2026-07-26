@@ -445,6 +445,30 @@ if primary_indicator:
             unsafe_allow_html=True,
         )
 
+def year_selector(df: pd.DataFrame, key: str, label: str = "Year") -> int:
+    """
+    Year picker that degrades safely when the snapshot covers a single year.
+
+    ``st.slider`` raises ``StreamlitAPIException`` when ``min_value == max_value``,
+    which crashes the whole page for sparse real WHO snapshots. In that case the
+    single available year is shown as a caption instead.
+    """
+    min_year = int(df["Year"].min())
+    max_year = int(df["Year"].max())
+    if min_year >= max_year:
+        st.caption(f"{label}: {max_year} (only year available in the current selection)")
+        return max_year
+    return int(
+        st.slider(
+            label,
+            min_value=min_year,
+            max_value=max_year,
+            value=min(latest_year, max_year),
+            key=key,
+        )
+    )
+
+
 # Tabs
 tab_map, tab_rank, tab_trend, tab_compare, tab_profile, tab_dist, tab_corr, tab_data = st.tabs(
     ["🗺️ Geographic", "🏆 Ranking", "📈 Trend", "📊 Comparison", "🏳️ Country Profile", "📉 Distribution", "🔗 Association", "📋 Data Explorer"]
@@ -456,7 +480,7 @@ with tab_map:
         st.info("Select at least one indicator.")
     else:
         indicator_sel = st.selectbox("Indicator for map", selected_indicators, format_func=svc.indicator_short_name, key="map_indicator") if len(selected_indicators) > 1 else primary_indicator
-        map_year = st.slider("Year", min_value=int(filtered_df["Year"].min()), max_value=int(filtered_df["Year"].max()), value=min(latest_year, int(filtered_df["Year"].max())), key="map_year")
+        map_year = year_selector(filtered_df, key="map_year")
         geo_df = svc.build_geospatial_data(filtered_df, indicator_sel, map_year)
 
         if geo_df.empty:
@@ -488,7 +512,7 @@ with tab_rank:
         st.info("Select at least one indicator.")
     else:
         rank_indicator = st.selectbox("Rank by", selected_indicators, format_func=svc.indicator_short_name, key="rank_indicator")
-        rank_year = st.slider("Year", min_value=int(filtered_df["Year"].min()), max_value=int(filtered_df["Year"].max()), value=min(latest_year, int(filtered_df["Year"].max())), key="rank_year")
+        rank_year = year_selector(filtered_df, key="rank_year")
         rank_n = st.slider("Show top N", 5, 50, 20, key="rank_n")
         is_mortality = "MORTALITY" in rank_indicator
         rank_df = svc.build_ranking_data(filtered_df, rank_indicator, rank_year, top_n=rank_n, ascending=not is_mortality)
@@ -536,7 +560,7 @@ with tab_compare:
     if len(selected_indicators) < 2:
         st.info("Select at least two indicators.")
     else:
-        comp_year = st.slider("Year", min_value=int(filtered_df["Year"].min()), max_value=int(filtered_df["Year"].max()), value=min(latest_year, int(filtered_df["Year"].max())), key="comp_year")
+        comp_year = year_selector(filtered_df, key="comp_year")
         year_data = filtered_df[filtered_df["Year"] == comp_year]
         if "Both sexes" in year_data["Gender"].values:
             year_data = year_data[year_data["Gender"] == "Both sexes"]
@@ -578,7 +602,7 @@ with tab_dist:
         st.info("Select at least one indicator.")
     else:
         dist_indicator = st.selectbox("Indicator", selected_indicators, format_func=svc.indicator_short_name, key="dist_indicator")
-        dist_year = st.slider("Year", min_value=int(filtered_df["Year"].min()), max_value=int(filtered_df["Year"].max()), value=min(latest_year, int(filtered_df["Year"].max())), key="dist_year")
+        dist_year = year_selector(filtered_df, key="dist_year")
         dist_df = svc.build_distribution_data(filtered_df, dist_indicator, dist_year)
 
         if dist_df.empty:
@@ -613,25 +637,103 @@ with tab_corr:
         ind_x = st.selectbox("X-axis indicator", selected_indicators, format_func=svc.indicator_short_name, key="corr_x")
         remaining = [i for i in selected_indicators if i != ind_x]
         ind_y = st.selectbox("Y-axis indicator", remaining, format_func=svc.indicator_short_name, key="corr_y")
-        corr_year = st.slider("Year", min_value=int(filtered_df["Year"].min()), max_value=int(filtered_df["Year"].max()), value=min(latest_year, int(filtered_df["Year"].max())), key="corr_year")
+        corr_year = year_selector(filtered_df, key="corr_year")
 
         corr_df, pearson_r = svc.build_correlation_data(filtered_df, ind_x, ind_y, corr_year)
 
+        min_obs = svc.MIN_CORRELATION_OBSERVATIONS
         if corr_df.empty:
-            st.info("Insufficient overlapping data.")
+            # Guard: fewer than the required number of complete pairs. Show a clear
+            # message instead of raising, so the app never crashes on sparse years.
+            st.info(
+                f"Insufficient overlapping data — at least {min_obs} countries must report "
+                f"both **{svc.indicator_short_name(ind_x)}** and **{svc.indicator_short_name(ind_y)}** "
+                f"in {corr_year}. Missing values are removed pairwise. "
+                "Try a different year, widen the country/region filters, or pick another indicator pair."
+            )
         else:
-            fig = px.scatter(corr_df, x="Value_X", y="Value_Y", color="Continent" if "Continent" in corr_df.columns else None, hover_name="Country" if "Country" in corr_df.columns else "CountryCode", trendline="ols", labels={"Value_X": svc.indicator_short_name(ind_x), "Value_Y": svc.indicator_short_name(ind_y)}, height=480)
-            fig.update_layout(template="plotly_white", margin=dict(l=50, r=20, t=10, b=40))
+            x_label = svc.indicator_short_name(ind_x)
+            y_label = svc.indicator_short_name(ind_y)
+
+            fig = px.scatter(
+                corr_df,
+                x="Value_X",
+                y="Value_Y",
+                color="Continent" if "Continent" in corr_df.columns else None,
+                hover_name="Country" if "Country" in corr_df.columns else "CountryCode",
+                labels={"Value_X": x_label, "Value_Y": y_label},
+                height=480,
+            )
+
+            # Dependency-light OLS fit (numpy.polyfit) added as an explicit
+            # graph_objects trace. plotly.express trendline="ols" is deliberately NOT
+            # used: it imports statsmodels, which fails on Streamlit Community Cloud
+            # with "cannot import name '_lazywhere' from scipy._lib._util".
+            trend = svc.compute_ols_trendline(corr_df["Value_X"], corr_df["Value_Y"])
+
+            if trend is None:
+                st.info(
+                    f"Trendline not shown — fewer than {min_obs} valid observations remain after "
+                    "removing missing values, or the selected X indicator has no variation. "
+                    "The scatter plot below still shows the available observations."
+                )
+            else:
+                fig.add_trace(
+                    go.Scatter(
+                        x=trend["x_line"],
+                        y=trend["y_line"],
+                        mode="lines",
+                        name=f"OLS fit ({trend['equation']})",
+                        line=dict(color="#b03a2e", width=2, dash="dash"),
+                        hovertemplate=(
+                            f"OLS fit<br>{trend['equation']}"
+                            f"<br>R² = {trend['r_squared']:.3f}"
+                            f"<br>n = {trend['n_observations']}<extra></extra>"
+                        ),
+                    )
+                )
+
+            fig.update_layout(
+                template="plotly_white",
+                margin=dict(l=50, r=20, t=60, b=40),
+                title=dict(
+                    text=(
+                        f"Descriptive association — not causal inference<br>"
+                        f"<sub>{x_label} vs {y_label} · {corr_year} · n = {len(corr_df)} countries · "
+                        f"Pearson r = {pearson_r:.3f}</sub>"
+                    ),
+                    x=0.0,
+                    xanchor="left",
+                    font=dict(size=14),
+                ),
+            )
             st.plotly_chart(fig, use_container_width=True)
 
             abs_r = abs(pearson_r) if pearson_r == pearson_r else 0
             strength = "strong" if abs_r > 0.7 else "moderate" if abs_r > 0.4 else "weak"
             direction = "positive" if pearson_r > 0 else "negative"
 
+            m_r, m_n, m_year = st.columns(3)
+            m_r.metric("Correlation coefficient (Pearson r)", f"{pearson_r:.3f}")
+            m_n.metric("Sample size (countries)", f"{len(corr_df):,}")
+            m_year.metric("Selected year", f"{corr_year}")
+
+            if trend is not None:
+                fit_line = (
+                    f"<strong>Trendline:</strong> OLS via <code>numpy.polyfit</code> — "
+                    f"{trend['equation']} (R² = {trend['r_squared']:.3f}, n = {trend['n_observations']}"
+                    + (f", {trend['n_dropped']} pair(s) dropped as non-finite" if trend["n_dropped"] else "")
+                    + ")<br>"
+                )
+            else:
+                fit_line = "<strong>Trendline:</strong> not computed (insufficient valid observations).<br>"
+
             st.markdown(
                 '<div class="panel-info">'
                 f"<strong>Data-Driven Observation:</strong> Pearson <em>r</em> = <strong>{pearson_r:.3f}</strong> — a <em>{strength} {direction}</em> statistical association across {len(corr_df)} countries in {corr_year}.<br>"
-                f"<strong>Method:</strong> Pearson correlation | <strong>Missing handling:</strong> pairwise deletion | <strong>Year:</strong> {corr_year} | <strong>Indicators:</strong> {svc.indicator_short_name(ind_x)} vs {svc.indicator_short_name(ind_y)}<br>"
+                f"<strong>Method:</strong> Pearson correlation | <strong>Missing handling:</strong> pairwise deletion (countries missing either indicator in {corr_year} are excluded; minimum {min_obs} paired observations) | <strong>Year:</strong> {corr_year} | <strong>Indicators:</strong> {svc.indicator_short_name(ind_x)} (X) vs {svc.indicator_short_name(ind_y)} (Y)<br>"
+                f"{fit_line}"
+                f"<strong>Sample size:</strong> {len(corr_df)} countries | <strong>Unit of analysis:</strong> country-year, unweighted<br>"
                 f"This is a <strong>descriptive association, not causal inference</strong>."
                 "</div>",
                 unsafe_allow_html=True,

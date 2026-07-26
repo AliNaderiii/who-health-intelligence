@@ -25,5 +25,10 @@ pycountry==24.6.1
 plotly==5.24.1
 streamlit==1.40.2
 
-# Required by plotly.express trendline="ols" in the association view
-statsmodels==0.14.4
+# NOTE: statsmodels is intentionally NOT a runtime dependency.
+# The association view fits its OLS trendline with numpy.polyfit and draws it as a
+# plotly.graph_objects Scatter trace, so plotly.express trendline="ols" (which
+# imports statsmodels) is never reached. Pulling statsmodels in caused a production
+# crash on Streamlit Community Cloud:
+#   ImportError: cannot import name '_lazywhere' from 'scipy._lib._util'
+# because the resolved statsmodels/scipy pair was incompatible.

@@ -309,6 +309,87 @@ class TestCorrelation:
         assert merged.empty
 
 
+class TestOLSTrendline:
+    """The dependency-light replacement for plotly.express trendline='ols'."""
+
+    def test_perfect_fit_recovers_slope_and_intercept(self):
+        x = [1.0, 2.0, 3.0, 4.0, 5.0]
+        y = [3.0 * v + 2.0 for v in x]
+        trend = svc.compute_ols_trendline(x, y)
+
+        assert trend is not None
+        assert trend["slope"] == pytest.approx(3.0)
+        assert trend["intercept"] == pytest.approx(2.0)
+        assert trend["r_squared"] == pytest.approx(1.0)
+        assert trend["n_observations"] == 5
+        assert trend["n_dropped"] == 0
+        assert "numpy.polyfit" in trend["method"]
+
+    def test_line_endpoints_span_observed_x_range(self):
+        x = [10.0, 20.0, 30.0, 40.0]
+        y = [1.0, 2.5, 2.0, 4.0]
+        trend = svc.compute_ols_trendline(x, y)
+
+        assert trend is not None
+        assert trend["x_line"][0] == pytest.approx(10.0)
+        assert trend["x_line"][-1] == pytest.approx(40.0)
+        assert len(trend["x_line"]) == len(trend["y_line"])
+        assert np.all(np.isfinite(trend["y_line"]))
+
+    def test_negative_slope_and_r_squared_bounds(self):
+        x = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+        y = [10.0, 8.5, 8.0, 6.5, 5.0, 4.0]
+        trend = svc.compute_ols_trendline(x, y)
+
+        assert trend is not None
+        assert trend["slope"] < 0
+        assert 0.0 <= trend["r_squared"] <= 1.0
+
+    def test_missing_values_are_dropped_pairwise(self):
+        x = [1.0, 2.0, np.nan, 4.0, 5.0]
+        y = [2.0, 4.0, 6.0, np.nan, 10.0]
+        trend = svc.compute_ols_trendline(x, y)
+
+        assert trend is not None
+        assert trend["n_observations"] == 3
+        assert trend["n_dropped"] == 2
+        assert trend["slope"] == pytest.approx(2.0)
+
+    def test_returns_none_below_minimum_observations(self):
+        assert svc.compute_ols_trendline([1.0, 2.0], [3.0, 4.0]) is None
+        assert svc.compute_ols_trendline([], []) is None
+
+    def test_returns_none_when_all_values_missing(self):
+        assert svc.compute_ols_trendline([np.nan] * 5, [np.nan] * 5) is None
+
+    def test_returns_none_for_zero_variance_x(self):
+        assert svc.compute_ols_trendline([5.0, 5.0, 5.0, 5.0], [1.0, 2.0, 3.0, 4.0]) is None
+
+    def test_returns_none_on_mismatched_lengths(self):
+        assert svc.compute_ols_trendline([1.0, 2.0, 3.0], [1.0, 2.0]) is None
+
+    def test_handles_infinite_values_without_crashing(self):
+        x = [1.0, 2.0, 3.0, 4.0, np.inf]
+        y = [2.0, 4.0, 6.0, 8.0, 1.0]
+        trend = svc.compute_ols_trendline(x, y)
+
+        assert trend is not None
+        assert trend["n_observations"] == 4
+        assert trend["n_dropped"] == 1
+
+    def test_accepts_pandas_series_from_correlation_data(self, sample_df):
+        merged, _r = svc.build_correlation_data(
+            sample_df, "NCD_MORTALITY", "UHC_COVERAGE", 2020
+        )
+        trend = svc.compute_ols_trendline(merged["Value_X"], merged["Value_Y"])
+
+        assert trend is not None
+        assert trend["n_observations"] == len(merged)
+
+    def test_minimum_observations_constant_is_three(self):
+        assert svc.MIN_CORRELATION_OBSERVATIONS == 3
+
+
 class TestCountryProfile:
     def test_basic(self, sample_df):
         profile = svc.build_country_profile(sample_df, "USA")
