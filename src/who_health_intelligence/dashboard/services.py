@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 
 from ..etl.loader import DatabaseLoader
@@ -61,6 +62,11 @@ INDICATOR_UNITS: Dict[str, str] = {
     "MATERNAL_MORTALITY": "per 100,000 live births",
     "INFANT_MORTALITY": "per 1,000 live births",
 }
+
+# Minimum number of complete paired observations required before a Pearson
+# correlation or an OLS trendline is reported. Below this threshold the views
+# must show an explanatory message instead of a statistic.
+MIN_CORRELATION_OBSERVATIONS: int = 3
 
 
 def indicator_short_name(indicator: str) -> str:
@@ -663,11 +669,88 @@ def build_correlation_data(df: pd.DataFrame, indicator_x: str, indicator_y: str,
     merged = merged.merge(name_map, on=country_col, how="left")
     merged = merged.dropna(subset=["Value_X", "Value_Y"])
 
-    if len(merged) < 3:
+    if len(merged) < MIN_CORRELATION_OBSERVATIONS:
         return pd.DataFrame(), float("nan")
 
     pearson_r = float(merged["Value_X"].corr(merged["Value_Y"]))
     return merged, pearson_r
+
+
+def compute_ols_trendline(
+    x: Any,
+    y: Any,
+    n_points: int = 100,
+) -> Optional[Dict[str, Any]]:
+    """
+    Fit a simple ordinary-least-squares line y = slope * x + intercept.
+
+    Implemented with ``numpy.polyfit`` (which wraps ``numpy.linalg.lstsq``) so the
+    dashboard has **no runtime dependency on statsmodels or scipy**. This avoids the
+    ``plotly.express`` ``trendline="ols"`` code path, which imports statsmodels and
+    breaks on Streamlit Community Cloud whenever the resolved statsmodels/scipy pair
+    is incompatible (``ImportError: cannot import name '_lazywhere'``).
+
+    Unit of analysis:
+        Paired entity observations (usually countries in a single year).
+    Missing data behavior:
+        Pairwise deletion — any pair with a missing or non-finite value in either
+        indicator is dropped before fitting.
+    Descriptive or inferential:
+        Descriptive association only. The fitted line summarises the observed
+        relationship and must not be read as causal inference.
+
+    Returns ``None`` when fewer than ``MIN_CORRELATION_OBSERVATIONS`` valid pairs
+    remain, or when the fit is not numerically defined (e.g. zero variance in x).
+    Callers are expected to surface a message instead of crashing.
+    """
+    x_arr = pd.to_numeric(pd.Series(x), errors="coerce").to_numpy(dtype=float)
+    y_arr = pd.to_numeric(pd.Series(y), errors="coerce").to_numpy(dtype=float)
+
+    if x_arr.size != y_arr.size or x_arr.size == 0:
+        return None
+
+    valid = np.isfinite(x_arr) & np.isfinite(y_arr)
+    x_valid = x_arr[valid]
+    y_valid = y_arr[valid]
+    n_valid = int(x_valid.size)
+    n_dropped = int(x_arr.size - n_valid)
+
+    if n_valid < MIN_CORRELATION_OBSERVATIONS:
+        return None
+
+    # Degenerate geometry: a vertical (or single-point) cloud has no OLS slope.
+    if np.ptp(x_valid) == 0:
+        return None
+
+    try:
+        slope, intercept = np.polyfit(x_valid, y_valid, 1)
+    except (np.linalg.LinAlgError, ValueError, TypeError):
+        return None
+
+    slope = float(slope)
+    intercept = float(intercept)
+    if not (np.isfinite(slope) and np.isfinite(intercept)):
+        return None
+
+    x_line = np.linspace(float(x_valid.min()), float(x_valid.max()), max(int(n_points), 2))
+    y_line = slope * x_line + intercept
+
+    y_pred = slope * x_valid + intercept
+    ss_res = float(np.sum((y_valid - y_pred) ** 2))
+    ss_tot = float(np.sum((y_valid - y_valid.mean()) ** 2))
+    r_squared = float(1.0 - ss_res / ss_tot) if ss_tot > 0 else float("nan")
+
+    return {
+        "slope": slope,
+        "intercept": intercept,
+        "r_squared": r_squared,
+        "n_observations": n_valid,
+        "n_dropped": n_dropped,
+        "x_line": x_line,
+        "y_line": y_line,
+        "equation": f"y = {slope:.4g}x {'+' if intercept >= 0 else '-'} {abs(intercept):.4g}",
+        "method": "Ordinary least squares (numpy.polyfit, degree 1)",
+    }
 
 
 def build_country_profile(df: pd.DataFrame, country_code: str) -> pd.DataFrame:

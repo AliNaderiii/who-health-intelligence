@@ -198,7 +198,7 @@ WHO_DATA_MODE=demo streamlit run src/who_health_intelligence/dashboard/app.py
 - `.python-version` — contains `3.12`
 
 Newer interpreters (3.13/3.14) are not supported: the pinned scientific stack
-(`numpy`, `pandas`, `statsmodels`, and Streamlit's `pyarrow`/`scipy` transitives)
+(`numpy`, `pandas`, and Streamlit's `pyarrow`/`scipy` transitives)
 does not publish prebuilt wheels for them, so the dependency step falls back to
 compiling from source and never finishes on a hosted builder.
 
@@ -220,13 +220,26 @@ pip install -r requirements-dev.txt
 
 | File | Contents | Installed on Streamlit Cloud |
 |---|---|---|
-| `requirements.txt` | `streamlit`, `pandas`, `numpy`, `plotly`, `requests`, `urllib3`, `pycountry`, `statsmodels` | Yes |
+| `requirements.txt` | `streamlit`, `pandas`, `numpy`, `plotly`, `requests`, `urllib3`, `pycountry` | Yes |
 | `requirements-dev.txt` | `pytest`, `nbformat`, `pyflakes` (plus `requirements.txt`) | No |
 
 `nbformat` is only used by `scripts/generate_notebook.py` and its tests, never by
-the deployed dashboard, so it is a development dependency. `statsmodels` stays in
-the runtime set because `plotly.express` needs it for the `trendline="ols"` fit in
-the association view. `pycountry` supplies ISO 3166 country metadata.
+the deployed dashboard, so it is a development dependency. `pycountry` supplies
+ISO 3166 country metadata.
+
+**`statsmodels` is deliberately not a runtime dependency.** The association view
+previously used `plotly.express` `trendline="ols"`, which imports `statsmodels`
+internally. On Streamlit Community Cloud the resolved `statsmodels`/`scipy` pair was
+incompatible and the correlation tab crashed with:
+
+```
+ImportError: cannot import name '_lazywhere' from 'scipy._lib._util'
+```
+
+The trendline is now fitted with `numpy.polyfit` in
+`services.compute_ols_trendline()` and drawn as an explicit
+`plotly.graph_objects.Scatter` trace, so the dashboard has no `statsmodels` or
+direct `scipy` import path at all.
 
 ---
 
@@ -484,7 +497,7 @@ Example JSON structure:
 
 - `runtime.txt` — `python-3.12`, pins the deployment interpreter
 - `.python-version` — `3.12`, read by uv-based builders and local version managers
-- `requirements.txt` — runtime dependencies only (`streamlit`, `pandas`, `numpy`, `plotly`, `requests`, `urllib3`, `pycountry`, `statsmodels`)
+- `requirements.txt` — runtime dependencies only (`streamlit`, `pandas`, `numpy`, `plotly`, `requests`, `urllib3`, `pycountry`)
 - `requirements-dev.txt` — test and tooling dependencies, not installed on Streamlit Cloud
 - `.streamlit/config.toml` — theme, server headless, usage stats disabled, max upload 200
 - `.env.example` — documents all env vars
